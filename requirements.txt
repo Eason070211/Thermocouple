@@ -1,0 +1,11 @@
+# 32 路热电偶测温上位机依赖
+# 安装: pip install -r requirements.txt
+#
+# 说明:
+#   tkinter 是 Python 标准库 (Windows 官方安装包自带);
+#   Linux 下若缺失请装系统包: sudo apt install python3-tk
+
+pyserial>=3.5          # 串口通信 (Serial, list_ports)
+matplotlib>=3.6        # 绘图 (FigureCanvasTkAgg 嵌入 Tkinter)
+pandas>=1.5            # CSV 记录
+numpy>=1.23            # 环形缓冲与数组运算

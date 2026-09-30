@@ -1,0 +1,26 @@
+--cpu Cortex-M3
+"thermocouple\startup_stm32f103xb.o"
+"thermocouple\main.o"
+"thermocouple\gpio.o"
+"thermocouple\spi.o"
+"thermocouple\usart.o"
+"thermocouple\stm32f1xx_it.o"
+"thermocouple\stm32f1xx_hal_msp.o"
+"thermocouple\stm32f1xx_hal_gpio_ex.o"
+"thermocouple\stm32f1xx_hal_spi.o"
+"thermocouple\stm32f1xx_hal.o"
+"thermocouple\stm32f1xx_hal_rcc.o"
+"thermocouple\stm32f1xx_hal_rcc_ex.o"
+"thermocouple\stm32f1xx_hal_gpio.o"
+"thermocouple\stm32f1xx_hal_dma.o"
+"thermocouple\stm32f1xx_hal_cortex.o"
+"thermocouple\stm32f1xx_hal_pwr.o"
+"thermocouple\stm32f1xx_hal_flash.o"
+"thermocouple\stm32f1xx_hal_flash_ex.o"
+"thermocouple\stm32f1xx_hal_exti.o"
+"thermocouple\stm32f1xx_hal_uart.o"
+"thermocouple\system_stm32f1xx.o"
+--strict --scatter "Thermocouple\Thermocouple.sct"
+--summary_stderr --info summarysizes --map --load_addr_map_info --xref --callgraph --symbols
+--info sizes --info totals --info unused --info veneers
+--list "Thermocouple.map" -o Thermocouple\Thermocouple.axf
