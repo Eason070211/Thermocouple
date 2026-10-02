@@ -56,7 +56,8 @@ void DebugMon_Handler(void);
 void PendSV_Handler(void);
 void SysTick_Handler(void);
 /* USER CODE BEGIN EFP */
-void EXTI0_IRQHandler(void);    /* 16 片 ADS1220 合并 DRDY (PA0) */
+/* 注: 8 路版本不再使用 DRDY 中断 (每片 DRDY 改由主循环轮询, 见 spi_driver.c),
+ *     原来的 EXTI0_IRQHandler 已移除。 */
 void USART1_IRQHandler(void);   /* 上位机串口 (收命令 / 发上报帧) */
 /* USER CODE END EFP */
 

@@ -43,7 +43,12 @@ class DemoSource(threading.Thread):
 
     def __init__(self, out_queue: Optional["queue.Queue[Dict]"] = None,
                  frame_period: float = 0.1, status_period: float = 1.0,
-                 corrupt_rate: float = 0.02, seed: Optional[int] = 20240521):
+                 corrupt_rate: float = 0.02, seed: Optional[int] = 20240521,
+                 chip_count: int = 4):
+        """
+        :param chip_count: 虚拟下位机的 ADS1220 片数 (1..16)。默认 4 片 = 8 路,
+                           与真实固件 board_config.h 的默认值一致。
+        """
         super().__init__(name="DemoSource", daemon=True)
         self.out_queue: "queue.Queue[Dict]" = out_queue or queue.Queue()
         self.frame_period = frame_period
@@ -60,12 +65,16 @@ class DemoSource(threading.Thread):
         self.running = True
         self.rounds = 0
         self.open_count = 0
+        #: 虚拟下位机"本板片数": 默认 4 片 = 8 路, 与真实固件的默认配置一致。
+        #: 想演示 4 路/16 路, 构造时传 chip_count=2 / 8 即可。
+        self.chip_count = max(1, min(int(chip_count), CHIP_COUNT))
+        self.active_channels = min(self.chip_count * 2, CHANNEL_COUNT)
         self._t0 = time.time()
         self._phases = [self._random.uniform(0, 2 * math.pi) for _ in range(CHANNEL_COUNT)]
         self._base = [self._random.uniform(15.0, 45.0) for _ in range(CHANNEL_COUNT)]
-        #: 固定几个"故障演示"通道, 让界面上的状态列有东西可看
-        self._open_channels = {7, 19}
-        self._hot_channels = {3}
+        #: 固定几个"故障演示"通道 (只用本板存在的通道), 让状态列有东西可看
+        self._open_channels = {self.active_channels - 1}          # 最后一路周期性断线
+        self._hot_channels = {3} if self.active_channels > 3 else set()
         self._crc_ok = 0
         self._crc_bad = 0
 
@@ -116,22 +125,25 @@ class DemoSource(threading.Thread):
     def _status_dict(self) -> Dict:
         chip_ok = 0
         chip_err = 0
-        for chip in range(CHIP_COUNT):
-            if chip in {c // 2 for c in self._open_channels}:
+        # 只上报"本板存在"的那几片 (与真实固件只扫描 CHIP_COUNT 片一致)
+        err_chips = {c // 2 for c in self._open_channels}
+        for chip in range(self.chip_count):
+            if chip in err_chips:
                 chip_err |= 1 << chip
             else:
                 chip_ok |= 1 << chip
         payload = bytearray(STATUS_DATA_LEN)
         payload[0] = 1 if self.running else 0
         payload[1] = (self.dr_index << 5) & 0xE0
-        payload[2] = (self.reject_index << 4) & 0x30
+        # ★ byte2: 高 4 位抑制 + 低 4 位本板片数 (与固件 uart_protocol.c 一致)
+        payload[2] = (((self.reject_index << 4) & 0x30) | (self.chip_count & 0x0F))
         payload[3] = chip_ok & 0xFF
         payload[4] = (chip_ok >> 8) & 0xFF
         payload[5] = chip_err & 0xFF
         payload[6] = (chip_err >> 8) & 0xFF
         payload[7:11] = int(self.rounds).to_bytes(4, "little")
         payload[11:15] = int((time.time() - self._t0) * 1000).to_bytes(4, "little")
-        payload[15:17] = int(self.rounds * CHANNEL_COUNT & 0xFFFF).to_bytes(2, "little")
+        payload[15:17] = int(self.rounds * self.active_channels & 0xFFFF).to_bytes(2, "little")
         payload[17:19] = (0).to_bytes(2, "little")
         payload[19:21] = int(self.open_count & 0xFFFF).to_bytes(2, "little")
         payload[21] = 0
@@ -142,6 +154,10 @@ class DemoSource(threading.Thread):
         now = time.time() - self._t0
         values = []
         for ch in range(CHANNEL_COUNT):
+            # 本板不存在的通道一律 NaN —— 和真实固件"没接的槽位填 NaN"完全一致
+            if ch >= self.active_channels:
+                values.append(float("nan"))
+                continue
             base = self._base[ch] + 6.0 * math.sin(2 * math.pi * 0.05 * now + self._phases[ch])
             base += self._random.gauss(0.0, 0.08)          # 测量噪声
             if ch in self._open_channels and int(now) % 12 in (5, 6, 7):

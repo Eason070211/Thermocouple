@@ -171,6 +171,8 @@ class ChannelGrid(ttk.Frame):
         self.channels = channels
         self.columns = columns
         self.over_temp = float(over_temp)
+        #: 当前"真实存在"的通道数 (由固件状态帧的片数决定); 其余格子隐藏不显示
+        self.active = channels
         self._temp_labels: List[tk.Label] = []
         self._state_labels: List[tk.Label] = []
         self._cells: List[tk.Frame] = []
@@ -200,6 +202,24 @@ class ChannelGrid(ttk.Frame):
             self._state_labels.append(state)
 
     # ------------------------------------------------------------------
+    def set_active_channels(self, count: int) -> None:
+        """只显示前 ``count`` 路 (本板实际通道数), 其余格子直接隐藏。
+
+        ★ 8 路板就只显示 8 格, 不会因为协议里那 24 个恒为 NaN 的槽位
+          而满屏"断线", 也不会让人误以为板子坏了。
+        值没变时直接返回, 所以可以在每个状态帧里放心调用。
+        """
+        count = max(1, min(int(count), self.channels))
+        if count == self.active:
+            return
+        self.active = count
+        for ch, cell in enumerate(self._cells):
+            if ch < count:
+                cell.grid()                      # 恢复原来记住的 grid 位置
+            else:
+                cell.grid_remove()
+                self._cache[ch] = ("", "")       # 清缓存, 以后重新出现时能刷新
+
     def set_over_temp(self, value: float) -> None:
         self.over_temp = float(value)
 
@@ -241,6 +261,8 @@ class ChannelSelector(ttk.LabelFrame):
         self.on_change = on_change
         self.channels = len(self.colors)
         self.vars = [tk.BooleanVar(value=True) for _ in range(self.channels)]
+        #: 当前"真实存在"的通道数; 其余勾选框禁用并取消勾选 (曲线也不画)
+        self.active = self.channels
 
         # 用 tk.Checkbutton 而不是 ttk 的: ttk 样式无法逐个控件改前景色,
         # 而这里希望勾选框文字颜色 = 该通道曲线的颜色, 便于对照。
@@ -271,6 +293,24 @@ class ChannelSelector(ttk.LabelFrame):
         self._update_label()
 
     # ------------------------------------------------------------------
+    def set_active_channels(self, count: int) -> None:
+        """只让前 ``count`` 路可勾选 (本板实际通道数)。
+
+        其余勾选框置灰并取消勾选 —— 这样 visible_mask() 天然不会选中不存在的通道,
+        曲线层也不需要额外判断。值没变时直接返回。
+        """
+        count = max(1, min(int(count), self.channels))
+        if count == self.active:
+            return
+        self.active = count
+        for ch, box in enumerate(self.boxes):
+            if ch < count:
+                box.configure(state="normal")
+            else:
+                box.configure(state="disabled")
+                self.vars[ch].set(False)
+        self._changed()
+
     def visible_mask(self) -> np.ndarray:
         return np.array([bool(v.get()) for v in self.vars], dtype=bool)
 
@@ -280,18 +320,19 @@ class ChannelSelector(ttk.LabelFrame):
             self.on_change(self.visible_mask())
 
     def _set_all(self, value: bool) -> None:
-        for var in self.vars:
-            var.set(value)
+        # "全选" 只作用于本板真实存在的通道
+        for index, var in enumerate(self.vars):
+            var.set(value and index < self.active)
         self._changed()
 
     def _invert(self) -> None:
-        for var in self.vars:
-            var.set(not var.get())
+        for index, var in enumerate(self.vars):
+            var.set((not var.get()) if index < self.active else False)
         self._changed()
 
     def _update_label(self) -> None:
         count = int(self.visible_mask().sum())
         try:
-            self.visible_label.configure(text="显示 %d/32 路" % count)
+            self.visible_label.configure(text="显示 %d/%d 路" % (count, self.active))
         except tk.TclError:           # pragma: no cover
             pass

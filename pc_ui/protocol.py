@@ -78,6 +78,7 @@ ST_FLAG_DRDY_SILENT = 0x02            # 长时间收不到 DRDY
 ST_FLAG_VERIFY_FAIL = 0x04            # 上电回读校验失败
 ST_FLAG_TX_OVERFLOW = 0x08            # 串口发送缓冲溢出
 ST_FLAG_CRC_ERR = 0x10                # 收到过 CRC 错的下行帧
+ST_FLAG_DRDY_PARTIAL = 0x20           # 有片一直不就绪 (看 chip_err 位图定位)
 
 ST_FLAG_TEXT = (
     (ST_FLAG_SELFTEST, "自检失败"),
@@ -85,7 +86,13 @@ ST_FLAG_TEXT = (
     (ST_FLAG_VERIFY_FAIL, "回读校验失败"),
     (ST_FLAG_TX_OVERFLOW, "发送缓冲溢出"),
     (ST_FLAG_CRC_ERR, "收到CRC错帧"),
+    (ST_FLAG_DRDY_PARTIAL, "有片无DRDY"),
 )
+
+#: 温度帧的**固定**槽位数 —— 与板子实际通道数无关。
+#: 4 路板 / 8 路板 / 16 路板 共用同一套协议与同一份上位机,
+#: 没接的槽位填 NaN; 真实通道数由状态帧的 chip_count 告知。
+TEMP_SLOT_COUNT = 32
 
 #: K 型热电偶物理量程 (°C), 来自 Core/Inc/thermocouple.h
 TC_TEMP_MIN_C = -200.0
@@ -304,12 +311,24 @@ def parse_status(payload: bytes) -> Dict:
     chip_ok = d[3] | (d[4] << 8)
     chip_err = d[5] | (d[6] << 8)
 
+    # ★ 本板实际片数: 固件放在状态帧 byte2 的低 4 位 (高 4 位仍是 50/60 抑制)。
+    #   老固件该字段恒为 0, 这时退化成"按 OK|ERR 位图推断", 再不行就按 32 槽。
+    chip_count = d[2] & 0x0F
+    if chip_count:
+        active_channels = min(chip_count * 2, TEMP_SLOT_COUNT)
+    else:
+        mask = chip_ok | chip_err
+        inferred = mask.bit_length()          # 最高置位 bit + 1 = 扫过的片数
+        active_channels = min(inferred * 2, TEMP_SLOT_COUNT) if inferred else TEMP_SLOT_COUNT
+
     return {
         "run": d[0],
         "dr_bits": dr_bits,
         "dr_sps": dr_sps,
         "reject_bits": d[2] & 0x30,
         "reject": REJECT_TABLE[(d[2] >> 4) & 0x03],
+        "chip_count": chip_count,
+        "active_channels": active_channels,
         "chip_ok": chip_ok,
         "chip_err": chip_err,
         # bit n = 1 表示第 n 片正常
@@ -447,7 +466,7 @@ def selftest(verbose: bool = True) -> bool:
     payload = bytearray(STATUS_DATA_LEN)
     payload[0] = 1             # run
     payload[1] = 0x00          # DR = 20SPS
-    payload[2] = 0x10          # 抑制 = 50/60
+    payload[2] = 0x14          # 高4位 抑制 = 50/60, 低4位 = 本板 4 片
     payload[3] = payload[4] = 0xFF
     payload[7:11] = (1234).to_bytes(4, "little")
     payload[21] = ST_FLAG_CRC_ERR
@@ -457,6 +476,13 @@ def selftest(verbose: bool = True) -> bool:
     check("chip_ok == 0xFFFF", st["chip_ok"] == 0xFFFF)
     check("flags 文本 = 收到CRC错帧", st["flag_text"] == "收到CRC错帧")
     check("短包返回 error", "error" in parse_status(b"\x00\x01"))
+    # ★ 8 路版本新增字段
+    check("chip_count == 4 (本板片数)", st["chip_count"] == 4)
+    check("active_channels == 8 (片数x2)", st["active_channels"] == 8)
+    check("抑制字段仍能正确解析", st["reject"] == "同时抑制50+60Hz")
+    payload[2] = 0x00          # 模拟老固件: 没有片数字段
+    old = parse_status(bytes(payload))
+    check("老固件回退: 按位图推断出 32 槽", old["active_channels"] == TEMP_SLOT_COUNT)
 
     if verbose:
         print("6) 参数校验")

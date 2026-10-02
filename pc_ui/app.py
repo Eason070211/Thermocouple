@@ -67,7 +67,7 @@ except ImportError:                   # pragma: no cover
     from simulator import DemoSource
     from widgets import ChannelGrid, ChannelSelector, RingBuffer, StatusLamp
 
-APP_TITLE = "32 路热电偶温度监测上位机  ·  STM32F103 + 16×ADS1220"
+APP_TITLE = "热电偶温度监测上位机  ·  STM32F103 + N×ADS1220"
 
 
 class TemperatureApp:
@@ -87,13 +87,20 @@ class TemperatureApp:
                  retention: int = 1000,
                  record_dir: str = "./data",
                  over_temp: float = 1000.0,
-                 auto_connect: bool = True):
+                 auto_connect: bool = True,
+                 channels: int = 0):
+        """
+        :param channels: 强制指定本板通道数 (4/8/16/32); 0 = 自动,
+                         由固件状态帧上报的片数决定 (推荐)。
+        """
         self.demo = demo
         self.initial_port = port or ""
         self.initial_baud = int(baudrate)
         self.initial_retention = int(retention)
         self.initial_record_dir = record_dir
         self.initial_over_temp = float(over_temp)
+        #: 用户强制的通道数 (0 = 跟随固件自动识别)
+        self.forced_channels = int(channels or 0)
 
         # ---------------- 运行时状态 ----------------
         self.rx_queue: "queue.Queue[Dict]" = queue.Queue()
@@ -102,6 +109,9 @@ class TemperatureApp:
         self.ring = RingBuffer(retention, CHANNEL_COUNT)
         self.latest = np.full(CHANNEL_COUNT, np.nan, dtype=float)
         self.visible = np.ones(CHANNEL_COUNT, dtype=bool)
+        #: 本板真实存在的通道数。初值与控件保持一致(都是 32),
+        #: 之后由状态帧或 --channels 参数收窄成实际值。
+        self.active_channels = CHANNEL_COUNT
         self.status: Optional[Dict] = None
         self.over_temp = float(over_temp)
         self.t0: Optional[float] = None          # 会话第一帧的时间戳 (X 轴零点)
@@ -155,6 +165,10 @@ class TemperatureApp:
         self._build_layout()
         self._build_menu()
         self._bind_shortcuts()
+
+        # 命令行强制指定了通道数就先按它显示 (不等状态帧)
+        if self.forced_channels:
+            self._apply_active_channels(self.forced_channels)
 
         self.refresh_ports()
         self._log("界面已启动%s" % (" (演示模式: 使用虚拟下位机)" if demo else ""))
@@ -257,7 +271,7 @@ class TemperatureApp:
                    ).grid(row=0, column=0, sticky="ew", padx=4, pady=2)
         ttk.Button(box, text="停止采集", command=lambda: self.acquire(False)
                    ).grid(row=0, column=1, sticky="ew", padx=4, pady=2)
-        ttk.Button(box, text="单次读取全部 32 路", command=self.single_read
+        ttk.Button(box, text="单次读取全部通道", command=self.single_read
                    ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=4, pady=2)
 
         # ---------- 3. 数据记录 ----------
@@ -312,6 +326,7 @@ class TemperatureApp:
         box.grid(row=4, column=0, sticky="ew")
         box.columnconfigure(1, weight=1)
         for row, (key, text) in enumerate((
+                ("channels", "本板通道数"),
                 ("fps", "帧率"),
                 ("frames", "温度帧"),
                 ("valid", "有效通道"),
@@ -368,7 +383,8 @@ class TemperatureApp:
     def _build_right_panel(self, parent: ttk.Frame) -> None:
         parent.columnconfigure(0, weight=1)
 
-        box = ttk.LabelFrame(parent, text=" 实时数值 (32 路) ", style="Section.TLabelframe")
+        box = ttk.LabelFrame(parent, text=" 实时数值 ", style="Section.TLabelframe")
+        self.values_box = box          # 通道数变化时改标题用
         box.grid(row=0, column=0, sticky="nsew")
         # 4 列 x 8 行: 32 路一屏放得下, 高度也不会顶到窗口底部
         self.grid_view = ChannelGrid(box, channels=CHANNEL_COUNT, columns=4,
@@ -484,7 +500,10 @@ class TemperatureApp:
         self._values_dirty = True
 
         if self.demo:
-            self.reader = DemoSource(self.rx_queue)
+            # 演示模式的片数跟随 --channels (默认 4 片 = 8 路)
+            self.reader = DemoSource(self.rx_queue,
+                                     chip_count=(self.forced_channels // 2)
+                                     if self.forced_channels else 4)
             self._log("已连接虚拟下位机 (DEMO)")
         else:
             self.reader = SerialReader(port, baud, self.rx_queue,
@@ -739,8 +758,33 @@ class TemperatureApp:
         if "error" in status:
             self._log("状态帧解析失败: %s" % status["error"], "error")
             return
+
+        # ★ 跟随固件上报的本板片数: 8 路板就只显示 8 路, 不再把协议里
+        #   那 24 个恒为 NaN 的槽位显示成"断线"。
+        if not self.forced_channels:
+            active = int(status.get("active_channels") or CHANNEL_COUNT)
+            if active != self.active_channels:
+                self._apply_active_channels(active)
+
         if self.recorder.active:
             self.recorder.submit_status(self.last_status_time, status)
+
+    def _apply_active_channels(self, count: int) -> None:
+        """按本板实际通道数调整数值面板 / 勾选框 / 曲线。"""
+        count = max(2, min(int(count), CHANNEL_COUNT))
+        if count == self.active_channels:
+            return
+        self.active_channels = count
+        self.grid_view.set_active_channels(count)
+        self.selector.set_active_channels(count)
+        self.values_box.configure(text=" 实时数值 (%d 路) " % count)
+        self.visible = self.selector.visible_mask()
+        for ch in range(count, CHANNEL_COUNT):
+            self.lines[ch].set_visible(False)
+        self._plot_dirty = True
+        self._values_dirty = True
+        self._log("识别到本板通道数: %d 路 (%d 片 ADS1220)"
+                  % (count, (count + 1) // 2))
 
     # ==================================================================
     # 定时刷新
@@ -806,7 +850,7 @@ class TemperatureApp:
         x = t - origin
 
         for ch, line in enumerate(self.lines):
-            if self.visible[ch]:
+            if self.visible[ch] and ch < self.active_channels:
                 line.set_visible(True)
                 line.set_data(x, data[:, ch])
             else:
@@ -815,8 +859,10 @@ class TemperatureApp:
         if self.autoscale_var.get():
             if len(x) >= 2:
                 self.ax.set_xlim(float(x[0]), float(max(x[-1], x[0] + 1e-3)))
-            if self.visible.any():
-                block = data[:, self.visible]
+            # 自动缩放只看本板真实存在、且被勾选的那些通道
+            mask = self.visible & (np.arange(CHANNEL_COUNT) < self.active_channels)
+            if mask.any():
+                block = data[:, mask]
                 if block.size:
                     vmin = float(np.nanmin(block))
                     vmax = float(np.nanmax(block))
@@ -832,10 +878,13 @@ class TemperatureApp:
         while self._frame_times and now - self._frame_times[0] > 2.0:
             self._frame_times.popleft()
         fps = len(self._frame_times) / 2.0 if self._frame_times else 0.0
-        valid = int(np.count_nonzero(~np.isnan(self.latest)))
+        # 有效通道只统计本板真实存在的那些 (协议里没接的槽位恒为 NaN)
+        valid = int(np.count_nonzero(~np.isnan(self.latest[:self.active_channels])))
+        self.stat_vars["channels"].set("%d 路 / %d 片" % (self.active_channels,
+                                                          (self.active_channels + 1) // 2))
         self.stat_vars["fps"].set("%.1f Hz" % fps)
         self.stat_vars["frames"].set("%d 帧" % self.temp_frames)
-        self.stat_vars["valid"].set("%d / 32" % valid)
+        self.stat_vars["valid"].set("%d / %d" % (valid, self.active_channels))
         self.stat_vars["crc"].set("%d 帧" % self.crc_errors)
         self.stat_vars["rows"].set("%d 行" % self.recorder.rows_written)
 
@@ -847,8 +896,10 @@ class TemperatureApp:
         self.stat_vars["rounds"].set(str(status.get("rounds", "-")))
         self.stat_vars["uptime"].set("%.1f s" % (status.get("uptime_ms", 0) / 1000.0)
                                      if status else "-")
-        self.stat_vars["chip_ok"].set(status.get("chip_ok_text", "-"))
-        self.stat_vars["chip_err"].set(status.get("chip_err_text", "-"))
+        # 位图只显示本板实际片数那几位 (8 路板就是 4 位, 不会出现一堆前导 0)
+        bits = max(1, (self.active_channels + 1) // 2)
+        self.stat_vars["chip_ok"].set(str(status.get("chip_ok_text", "-"))[-bits:])
+        self.stat_vars["chip_err"].set(str(status.get("chip_err_text", "-"))[-bits:])
         self.stat_vars["open"].set(str(status.get("open_cnt", "-")))
         self.stat_vars["spi"].set(str(status.get("spi_err", "-")))
         self.stat_vars["timeout"].set(str(status.get("timeout_cnt", "-")))
@@ -857,9 +908,9 @@ class TemperatureApp:
         self.stat_vars["age"].set(age)
 
         self.counters_var.set(
-            "帧率 %.1f Hz | 温度帧 %d | CRC 丢弃 %d | 有效 %d/32 | 记录 %d 行%s"
-            % (fps, self.temp_frames, self.crc_errors, valid,
-               self.recorder.rows_written,
+            "本板 %d 路 | 帧率 %.1f Hz | 温度帧 %d | CRC 丢弃 %d | 有效 %d/%d | 记录 %d 行%s"
+            % (self.active_channels, fps, self.temp_frames, self.crc_errors, valid,
+               self.active_channels, self.recorder.rows_written,
                " | 曲线暂停" if self.paused else ""))
 
     # ==================================================================

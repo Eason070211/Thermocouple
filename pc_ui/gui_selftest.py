@@ -83,6 +83,24 @@ def main() -> int:
     check("帧率统计 > 0", app.stat_vars["fps"].get() not in ("-", "0.0 Hz"))
     print("     ylim=%s" % (app.ax.get_ylim(),))
 
+    # ---- ★ 8 路版本: 自动识别本板通道数 ----
+    app.root.update_idletasks()
+    check("自动识别本板通道数 = 8 (4 片)", app.active_channels == 8,
+          str(app.active_channels))
+    check("状态帧上报片数 = 4", (app.status or {}).get("chip_count") == 4,
+          str((app.status or {}).get("chip_count")))
+    check("数值面板只显示 8 格", app.grid_view.active == 8, str(app.grid_view.active))
+    check("第 9 路(索引 8)格子已隐藏", not app.grid_view._cells[8].winfo_ismapped())
+    check("曲线勾选框只开放 8 路", app.selector.active == 8, str(app.selector.active))
+    check("第 9 路(索引 8)勾选框已禁用",
+          str(app.selector.boxes[8].cget("state")) == "disabled")
+    check("未接通道不再被选中(可见掩码)",
+          int(app.visible.sum()) == 8, str(int(app.visible.sum())))
+    check("未接通道的曲线不可见",
+          all(not app.lines[ch].get_visible() for ch in range(8, CHANNEL_COUNT)))
+    check("统计面板显示本板通道数",
+          "8" in app.stat_vars["channels"].get(), app.stat_vars["channels"].get())
+
     # ---- 采样率切换 (CMD=0x01) ----
     app.rate_var.set("600 SPS")
     app.reject_var.set("不抑制")
@@ -114,7 +132,7 @@ def main() -> int:
     pump(app, 1.2)
     valid_now = int(np.count_nonzero(~np.isnan(app.latest)))
     check("单次读取返回结果 (只更新数值面板)",
-          valid_now >= CHANNEL_COUNT - 2 and app.ring.count == points_before,
+          valid_now >= app.active_channels - 1 and app.ring.count == points_before,
           "valid=%d, ring %d -> %d" % (valid_now, points_before, app.ring.count))
     app.acquire(True)
     pump(app, 1.5)

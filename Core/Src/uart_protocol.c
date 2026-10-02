@@ -260,20 +260,22 @@ uint8_t UART_Protocol_SendFrame(uint8_t cmd, const uint8_t *data, uint8_t len)
   return 1u;
 }
 
-uint8_t UART_Protocol_SendTempFrame(const float temps[TC_CHANNEL_COUNT])
+uint8_t UART_Protocol_SendTempFrame(const float temps[UART_TEMP_SLOT_COUNT])
 {
   /* static: 128 字节, 不放栈上 (启动文件默认只有 1KB 栈) */
   static uint8_t buf[UART_TEMP_DATA_LEN];
-  uint8_t i;
+  uint16_t i;
 
   if (temps == NULL)
   {
     return 0u;
   }
 
-  for (i = 0u; i < TC_CHANNEL_COUNT; i++)
+  /* ★ 固定 32 槽: 与板子通道数无关。本板没接的槽位由 main.c 预先填成 NaN,
+     这里原样打包发走, 上位机看到 NaN 就知道"该通道不存在/断线"。 */
+  for (i = 0u; i < UART_TEMP_SLOT_COUNT; i++)
   {
-    UART_PutFloatLE(&buf[(uint16_t)i * 4u], temps[i]);
+    UART_PutFloatLE(&buf[i * 4u], temps[i]);
   }
 
   return UART_Protocol_SendFrame(UART_CMD_UP_TEMP, buf, (uint8_t)UART_TEMP_DATA_LEN);
@@ -290,7 +292,9 @@ uint8_t UART_Protocol_SendStatusFrame(const UART_Status_t *st)
 
   d[UART_ST_RUN_STATE] = st->run_state;
   d[UART_ST_DR_BITS]   = st->dr_bits;
-  d[UART_ST_REJECT]    = st->reject;
+  /* ★ byte2: 高 4 位 = 50/60 抑制(老格式不变), 低 4 位 = 本板实际片数。
+     老上位机只取高 4 位, 因此完全兼容; 新上位机靠低 4 位知道"这片板子有几路"。 */
+  d[UART_ST_REJECT]    = (uint8_t)((st->reject & 0x30u) | (st->chip_count & 0x0Fu));
 
   UART_PutU16LE(&d[UART_ST_CHIP_OK_LO],  st->chip_ok_mask);
   UART_PutU16LE(&d[UART_ST_CHIP_ERR_LO], st->chip_err_mask);

@@ -1,38 +1,52 @@
 /**
   ******************************************************************************
   * @file    board_config.h
-  * @brief   16 x ADS1220 / 32 路热电偶测温系统 —— 硬件板级配置(单一事实来源)
+  * @brief   N x ADS1220 / 2N 路热电偶测温系统 —— 硬件板级配置(单一事实来源)
   *
   *          所有"和具体板子有关"的东西都集中在本文件:
-  *            - 芯片数量、通道数量
-  *            - SPI1 引脚、片选引脚、合并 DRDY 中断引脚
+  *            - 芯片数量(= 实际贴装的 ADS1220 片数)、通道数量
+  *            - SPI1 引脚、片选引脚、每片独立的 DRDY 引脚
   *            - UART 波特率
   *            - 全部关键时序常量 (tCLK / tRESET / tDATA / tCSSC / tSCCS ...)
   *
-  *          === 目标硬件 (已确认) ===
+  *          === 本板规模(可调) ===
+  *            贴 2 片 -> 4 路    (先打样验证用)
+  *            贴 4 片 -> 8 路    (目标配置, 默认)
+  *            贴 8 片 -> 16 路   (需要扩展 DRDY 引脚, 见第 4 节说明)
+  *          改规模只改 ADS1220_CHIP_COUNT 一个宏, 其余全部自动推导。
+  *
+  *          === 目标硬件 (8 路: 4 x ADS1220) ===
   *            MCU      : STM32F103C8T6  LQFP48  72MHz
   *            SPI      : SPI1  Mode1 (CPOL=0, CPHA=1)  SCK=PA5 MISO=PA6 MOSI=PA7
-  *            CS       : PB0..PB15  -> ADS1220 #0..#15  (低有效, 推挽 50MHz, 初始高)
-  *            DRDY     : 16 片 DRDY 经 2x74HC30 + 1x74HC132 与非合并 -> PA0 (EXTI0 下降沿)
+  *            CS       : PB0..PB3  -> ADS1220 #0..#3  (低有效, 推挽 50MHz, 初始高)
+  *            DRDY     : 每片一根, PA0..PA3 (输入 + 内部上拉, 软件轮询)
   *            UART     : USART1  TX=PA9  RX=PA10  115200(可 460800) 8N1
-  *            DEBUG    : SWD  SWDIO=PA13  SWCLK=PA14
+  *            DEBUG    : SWD  SWDIO=PA13 SWCLK=PA14
   *
-  *          === 引脚预算核算 (LQFP48 共 35 个可用 IO) ===
+  *          === 为什么改成"每片一根 DRDY"而不是原来的合并逻辑门 ===
+  *            16 片版本用 2x74HC30 + 74HC132 把 DRDY 与非合并成一路 (PA0/EXTI0)。
+  *            8 路版本只有 4 片, 引脚完全够用, 于是改成每片一根 DRDY 直接进 MCU:
+  *
+  *              1) 省掉外部逻辑芯片和它的去耦, 板子更小、BOM 更短、少一个故障点;
+  *              2) 没贴的芯片那一根 DRDY 用 MCU 内部上拉钳到高 = "永远没有新数据",
+  *                 不需要外部上拉电阻, 也不存在悬空导致误判的风险
+  *                 (这是"先贴 2 片、以后再贴满"能直接跑通的关键);
+  *              3) 固件能分辨"是哪一片没响应", 调试时直接定位到具体芯片
+  *                 (状态帧的 chip_err 位图 + UART_ST_FLAG_DRDY_PARTIAL 标志);
+  *              4) 不再需要外部逻辑门的传播延迟, 时序余量更大。
+  *
+  *            代价: 每增加一片就要多占一个 MCU 引脚 (见 ADS1220_DRDY_PIN)。
+  *
+  *          === 引脚预算核算 (LQFP48 共 35 个可用 IO, 8 路配置) ===
   *            占用: PA5,PA6,PA7 (SPI1) + PA9,PA10 (USART1) + PA13,PA14 (SWD)
-  *                  + PA0 (DRDY) + PB0..PB15 (CS x16)              = 24
-  *            剩余: PA1,PA2,PA3,PA4,PA8,PA11,PA12,PA15,PC13,PC14,PC15 = 11
-  *            => 刚好够用, 不要再把 PB 口挪作他用。
+  *                  + PA0..PA3 (DRDY x4) + PB0..PB3 (CS x4)          = 16
+  *            剩余: PA4,PA8,PA11,PA12,PA15,PB4..PB15,
+  *                  PC13,PC14,PC15 等约 19 个 IO, 扩到 8 片(16 路)也够用。
   *
-  *          === DRDY 合并逻辑说明 ===
-  *            ADS1220 的 DRDY 为 **低有效、推挽输出**, 且 "DRDY pin is always actively
-  *            driven, even when CS is high" (SBAS501D 8.5.1.3), 所以可以直接进逻辑门。
-  *            NAND(all16_H) = NOT(AND) = OR(any_low) , 因此
-  *                合并输出 = 低  <=>  至少一片 ADS1220 有新的转换结果
-  *            74HC132 是带施密特触发的 2 输入 NAND, 用来整形并驱动 EXTI0。
-  *
-  *            重要: 该合并信号 **无法分辨是哪一片** 拉低的。因此固件采用
-  *            "广播 START/SYNC 让 16 片重新同步 -> 等合并 DRDY 下降沿 -> 逐片 RDATA"
-  *            的策略 (详见 main.c 的轮询状态机注释)。
+  *          === 贴装策略 (板子绝不需要重画) ===
+  *            板上预留 4 个 ADS1220 焊盘, 先只贴 #0/#1 -> 固件 ADS1220_CHIP_COUNT=2;
+  *            四路验证通过后补焊 #2/#3  -> 固件改成 4, 重新编译下载即可。
+  *            没贴的芯片: CS 保持高(释放), DRDY 被内部上拉钳高, 固件不扫描它、也不等它。
   ******************************************************************************
   */
 
@@ -65,19 +79,31 @@ extern "C" {
 #endif
 
 /*==============================================================================
- * 1. 系统规模
+ * 1. 系统规模  ★★★ 换板子 / 增减芯片只改这一个宏 ★★★
  *============================================================================*/
-/** ADS1220 片数 (PE 片 2 路差分 => 总通道 = 2 x 片数) */
-#define ADS1220_CHIP_COUNT        16u
+/** 实际贴装的 ADS1220 片数。
+ *
+ *    2 -> 4 路   (先贴 2 片, 验证四路能不能跑通)
+ *    4 -> 8 路   (目标配置, 默认)
+ *    8 -> 16 路  (需要扩展 DRDY 引脚, 见第 4 节)
+ *
+ *  这个宏同时决定:
+ *    - 片选用了哪几个脚 (PB0 .. PB<CHIP_COUNT-1>)
+ *    - 固件上电回读校验 / 失调校准 / 每轮采集 扫描哪几片
+ *    - 状态帧里上报的"本板片数"(上位机据此只显示真实存在的通道)
+ *  协议帧格式不变: 始终 32 个 float 槽位, 没接的槽位填 NaN。 */
+#define ADS1220_CHIP_COUNT        4u
+
 /** 每片 ADS1220 的差分通道数 (AIN0/AIN1 与 AIN2/AIN3) */
 #define ADS1220_CH_PER_CHIP       2u
-/** 总测温通道数 */
-#define TC_CHANNEL_COUNT          (ADS1220_CHIP_COUNT * ADS1220_CH_PER_CHIP)   /* 32 */
-/** 协议/缓冲区支持的上限 (片选位图用 16bit, 不要超过 16) */
+/** 本板实际测温通道数 = 片数 x 2 (8 路配置时为 8) */
+#define TC_CHANNEL_COUNT          (ADS1220_CHIP_COUNT * ADS1220_CH_PER_CHIP)
+
+/** 协议/缓冲区支持的最大片数 (片选位图用 16bit, 不要超过 16) */
 #define ADS1220_MAX_CHIP          16u
 
-#if (ADS1220_CHIP_COUNT > ADS1220_MAX_CHIP)
-  #error "ADS1220_CHIP_COUNT 不能大于 16 (片选位图/CS 掩码按 16 位设计)"
+#if (ADS1220_CHIP_COUNT < 1u) || (ADS1220_CHIP_COUNT > ADS1220_MAX_CHIP)
+  #error "ADS1220_CHIP_COUNT 必须在 1..16 之间"
 #endif
 
 /** 芯片 n 的 A 通道在温度数组中的下标; B 通道为 (n*2+1) */
@@ -112,22 +138,44 @@ extern "C" {
 #define SPI_DRIVER_SHORT_NOP_CNT  8u       /* SPI_DRIVER_SHORT_DELAY() 里的 NOP 个数 */
 
 /*==============================================================================
- * 3. 片选 CS0..CS15 -> PB0..PB15
+ * 3. 片选 CS0..CS(n-1) -> PB0..PB(n-1)
  *    片选直接映射成 GPIOB 的位掩码, 一次写 BSRR 即可, 不需要查表。
- *    若改到别的端口/引脚, 只需改 ADS1220_CS_PORT / ADS1220_CS_PIN()。
+ *
+ *    ★ JTAG 冲突提醒: STM32 复位后默认 SWJ 全使能, PB3(JTDO)/PB4(NJTRST)/
+ *      PA15(JTDI)/PA13/PA14 被 JTAG+SWD 占用。本板 4 片会用到 PB3, 所以
+ *      spi_driver.c 里统一执行了 __HAL_AFIO_REMAP_SWJ_NOJTAG() (关 JTAG 留 SWD),
+ *      PB3/PB4 才能当普通推挽输出。
+ *      (16 片老版本用 PB0..PB15 却没关 JTAG -> CS3/CS4 实际是无效的, 见
+ *       docs/HARDWARE_8CH.md 的说明)
  *============================================================================*/
 #define ADS1220_CS_PORT           GPIOB
-#define ADS1220_CS_MASK_ALL       ((uint16_t)0xFFFFu)
-/** 第 chip 片的片选掩码 (chip = 0..15 => PB0..PB15) */
+/** 第 chip 片的片选掩码 (chip = 0..CHIP_COUNT-1 => PB0..PB15) */
 #define ADS1220_CS_PIN(chip)      ((uint16_t)(1u << (chip)))
+/** 本板实际用到的全部片选掩码 (只覆盖已配置的片数, 不会去动 PB4..PB15) */
+#define ADS1220_CS_MASK_ALL       ((uint16_t)((1u << ADS1220_CHIP_COUNT) - 1u))
 
 /*==============================================================================
- * 4. 合并 DRDY -> PA0 (EXTI0, 下降沿)
+ * 4. DRDY: 每片一根 -> PA0..PA3  (输入 + 内部上拉, 软件轮询, 不用逻辑门)
+ *    低有效: DRDY = 0 表示该片有未读走的新数据。
+ *    没贴的芯片: 该引脚被 MCU 内部上拉钳高, 读回来恒为 1 = "永远没数据";
+ *    同时固件只扫描/只等待 ADS1220_CHIP_COUNT 片里校验通过的片, 所以既不会
+ *    误判也不会拖慢采集。
  *============================================================================*/
 #define ADS1220_DRDY_PORT         GPIOA
-#define ADS1220_DRDY_PIN          GPIO_PIN_0
-#define ADS1220_DRDY_EXTI_IRQn    EXTI0_IRQn
-#define ADS1220_DRDY_IRQ_PRIO     1u       /* NVIC 抢占优先级 (0 最高, 分组 NVIC_PRIORITYGROUP_4) */
+/** 第 chip 片的 DRDY 掩码 (chip = 0..3 => PA0..PA3) */
+#define ADS1220_DRDY_PIN(chip)    ((uint16_t)(1u << (chip)))
+/** 本板实际用到的 DRDY 掩码 */
+#define ADS1220_DRDY_MASK_ALL     ((uint16_t)((1u << ADS1220_CHIP_COUNT) - 1u))
+
+/** DRDY 目前定义到 PA0..PA3, 即最多 4 片(8 路)。
+ *  想在一片板上做到 16 路(8 片), 把本宏和 spi_driver.c 的初始化掩码一起扩展:
+ *  可用的空脚有 PA4, PA8, PA11, PA12 (都在 GPIOA, 一次 HAL_GPIO_Init 就能配完),
+ *  再不够还可以用 PB4..PB15 / PC13..PC15。 */
+#define ADS1220_DRDY_MAX_CHIP     4u
+
+#if (ADS1220_CHIP_COUNT > ADS1220_DRDY_MAX_CHIP)
+  #error "DRDY 只定义到 PA0..PA3(4 片)。做 8 片(16 路)请先扩展 ADS1220_DRDY_PIN() 和 spi_driver.c"
+#endif
 
 /*==============================================================================
  * 5. USART1
@@ -135,7 +183,7 @@ extern "C" {
 #define UART1_GPIO_PORT           GPIOA
 #define UART1_TX_PIN              GPIO_PIN_9
 #define UART1_RX_PIN              GPIO_PIN_10
-#define UART1_IRQ_PRIO            2u       /* 低于 DRDY */
+#define UART1_IRQ_PRIO            2u       /* 只给 UART 用 (DRDY 已改成轮询, 无中断) */
 
 /** 波特率: 115200 (默认) / 460800 (高速采样率时必须, 见 docs/TIMING.md) */
 #define UART_BAUDRATE_115200      115200u
@@ -179,8 +227,8 @@ extern "C" {
  *      "Data can be read directly from this buffer on DOUT/DRDY when DRDY falls low
  *       without concern of data corruption"), 手册并未定义 tDATA。
  *      这里仍然保守地等 2us (约 8 个 tCLK), 用来覆盖:
- *        - 74HC30/74HC132 的传播延迟
- *        - EXTI 中断响应延迟
+ *        - 每片 DRDY 走线的延迟 (已无逻辑门, 比 16 片版本更短)
+ *        - 轮询/中断响应延迟
  *        - td(CSSC) 建立时间
  *  需求中"至少 1 个 CLK 周期"即指此值。 */
 #define ADS1220_T_DATA_US         2u
@@ -202,9 +250,9 @@ extern "C" {
   #error "SPI1 时钟超过 ADS1220 tc(SC)>=150ns 的上限(约6.67MHz), 请加大 ADS1220_SPI_DIV"
 #endif
 
-/* (2) SPI 时钟也不能太低, 否则 16 片 x 4 字节的批量读会挤掉转换窗口 */
+/* (2) SPI 时钟也不能太低, 否则逐片批量读会挤掉转换窗口 */
 #if (ADS1220_SPI_SCLK_HZ < 2000000u)
-  #warning "SPI1 时钟低于 2MHz, 16 片批量读会明显变慢, 建议 >= 4MHz"
+  #warning "SPI1 时钟低于 2MHz, 多片批量读会明显变慢, 建议 >= 4MHz"
 #endif
 
 /* (3) CS 建立/保持用的 NOP 延时必须覆盖 td(CSSC)/td(SCCS)/tw(CSH) 里最大的那个。
@@ -213,9 +261,14 @@ extern "C" {
   #error "SPI_DRIVER_SHORT_NOP_CNT 个 NOP 不足以满足 td(CSSC), 请加大 NOP 个数"
 #endif
 
-/* (4) 16 片 x 2 通道的片选位图必须放得下 */
+/* (4) 片选/错误位图按 16 位设计 */
 #if (ADS1220_MAX_CHIP != 16u)
   #error "片选位图/芯片掩码按 16 位设计, ADS1220_MAX_CHIP 必须是 16"
+#endif
+
+/* (5) ★ 8 路拓扑新增: DRDY 引脚必须够分 (每片一根) */
+#if (ADS1220_DRDY_MAX_CHIP < ADS1220_CHIP_COUNT)
+  #error "DRDY 引脚不够: 每片需要一根独立 DRDY, 请扩展 board_config.h 第 4 节"
 #endif
 
 /*==============================================================================
@@ -232,9 +285,15 @@ extern "C" {
  *    1 = BCS 常开 (严格按需求 "CONFIG1: BCS=断线检测使能"), 默认
  *    0 = BCS 关闭; 此时仍靠"采样值超量程"判断断线, 但要求模拟前端
  *        带有 TI 参考设计里的 1M~50M 偏置电阻 RB1/RB2 把开路输入拉满量程
- *  提示: 热电偶回路电阻 R 上会流过 10uA => 附加失调 10uA x R。
- *        2m 的 K 型偶丝回路电阻约几欧姆 => 几十 nV, 可忽略;
- *        若使用很长的补偿导线(上百欧姆), 建议改成 0 并在需要时临时开启。 */
+ *
+ *  ⚠️ 热电偶回路电阻 R 上会流过 10uA => 附加失调 = 10uA x R。
+ *     2m 的 K 型偶丝回路电阻约几欧姆 => 几十 nV, 可忽略;
+ *     若使用很长的补偿导线(上百欧姆), 建议改成 0 并在需要时临时开启。
+ *
+ *  ★ 8 路板要特别注意: 如果输入端串了 RC 滤波电阻(比如常见 1kΩ),
+ *    10uA x 1kΩ = 10mV 的固定失调, 折合 K 型约 240°C 的误差!
+ *    这时必须三选一: (a) 把本宏改 0; (b) 串阻取很小(<=10Ω);
+ *    (c) 只在测量窗口之外开 BCS。详见 docs/HARDWARE_8CH.md。 */
 #ifndef TC_BCS_ALWAYS_ON
   #define TC_BCS_ALWAYS_ON        1
 #endif
@@ -242,7 +301,7 @@ extern "C" {
 /** 上位机多久没发命令时, 主动推送一帧状态 (0 = 不自动推送, 只应答) */
 #define TC_STATUS_PUSH_PERIOD_MS  5000u
 
-/** 上电初始化时对 16 片做一次内部短路失调校准 (手册 9.1.5 推荐, 用于替代
+/** 上电初始化时对每片做一次内部短路失调校准 (手册 9.1.5 推荐, 用于替代
  *  ADS1220 并不存在的 "SELF CAL 0x04" 指令)。平均次数见 .c */
 #ifndef TC_OFFSET_CAL_ENABLE
   #define TC_OFFSET_CAL_ENABLE    1

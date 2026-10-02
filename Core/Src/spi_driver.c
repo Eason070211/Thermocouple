@@ -1,7 +1,7 @@
 /**
   ******************************************************************************
   * @file    spi_driver.c
-  * @brief   SPI1 总线层实现 (片选 / 事务 / 合并 DRDY / 延时)
+  * @brief   SPI1 总线层实现 (片选 / 事务 / 每片 DRDY 轮询与软件合成 / 延时)
   *
   *  === 时序依据 (TI ADS1220 数据手册 SBAS501D) ===
   *    td(CSSC)  CS 下降到第一个 SCLK 上升沿   >= 50ns
@@ -15,6 +15,11 @@
   *    使用专用 DRDY 引脚时, 数据在 DRDY 下降沿即已就绪, 手册未定义 tDATA;
   *    本层在每个事务前统一留出 ADS1220_T_DATA_US (2us ≈ 8 x tCLK) 作为裕量,
   *    该等待放在 ads1220.c 的 RDATA 之前, 这里只负责 CS/SCLK 的硬时序。
+  *
+  *  === DRDY: 硬件简化 + 软件合成 (见 spi_driver.h 顶部的详细说明) ===
+  *    每片一根 DRDY 直接进 MCU (PA0..PA3), 不用 74HC30/74HC132 逻辑门。
+  *    本层把 N 根合成出一个"全部就绪"信号, 对上层保持与老合并-DRDY 相同的语义,
+  *    同时额外提供逐片位图, 便于定位坏片。
   ******************************************************************************
   */
 
@@ -24,12 +29,17 @@
 /*==============================================================================
  * 私有变量
  *============================================================================*/
-/** 合并 DRDY 标志: 中断里只写这一个字节, 主循环里读并清零。
- *  用 uint8_t 而不是位域/结构体, 保证单指令读写(原子)。 */
-static volatile uint8_t  s_drdy_flag   = 0u;
-static volatile uint32_t s_drdy_irq_cnt = 0u;
+/** "全部就绪"的锁存: 1 = 自上次 DrdyClearFlag 之后见过一次"所有片都就绪"。
+ *  用 uint8_t 保证单指令读写(原子)。新方案没有 DRDY 中断, 只有主循环访问。 */
+static volatile uint8_t  s_all_ready_latch = 0u;
+static volatile uint32_t s_drdy_ready_cnt  = 0u;
 
-static uint32_t s_spi_err_cnt  = 0u;
+/** 本阶段"需要等待就绪"的片的掩码。
+ *  默认=全部; main.c 上电回读校验之后会把它收窄成"校验通过的片",
+ *  这样**没焊的芯片不会被等**, 也就不会因为缺片而每轮都超时。 */
+static uint16_t s_drdy_expected = ADS1220_DRDY_MASK_ALL;
+
+static uint32_t s_spi_err_cnt   = 0u;
 static uint8_t  s_last_err_chip = 0xFFu;
 static uint8_t  s_dwt_ok        = 0u;
 
@@ -49,7 +59,7 @@ static uint8_t  s_dwt_ok        = 0u;
 SPI_DRIVER_STATIC_ASSERT(SPI_DRIVER_SHORT_NOP_CNT == 8u, short_delay_nop_count);
 
 /* ---- 极短临界区: 用 PRIMASK 保存/恢复, 而不是无脑 __enable_irq()。
-      否则在"本来就已经关中断"的上下文里调用会提前开中断。 ---- */
+       否则在"本来就已经关中断"的上下文里调用会提前开中断。 ---- */
 #define SPI_DRV_CRITICAL_ENTER()   uint32_t _primask = __get_PRIMASK(); __disable_irq()
 #define SPI_DRV_CRITICAL_EXIT()    __set_PRIMASK(_primask)
 
@@ -90,12 +100,22 @@ void SPI_Driver_GpioInit(void)
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 #if defined(BOARD_MCU_FAMILY_F1)
-  __HAL_RCC_AFIO_CLK_ENABLE();          /* F1: EXTI 复用靠 AFIO_EXTICR */
+  __HAL_RCC_AFIO_CLK_ENABLE();          /* F1: 复用/AFIO 配置必须开这个时钟 */
 #elif defined(BOARD_MCU_FAMILY_F4)
-  __HAL_RCC_SYSCFG_CLK_ENABLE();        /* F4: EXTI 复用靠 SYSCFG_EXTICR */
+  __HAL_RCC_SYSCFG_CLK_ENABLE();        /* F4: 外部中断复用靠 SYSCFG */
 #endif
 
-  /* ---- 1) 16 个片选 PB0..PB15: 推挽输出, 50MHz, 初始高电平(释放) ---- */
+#if defined(BOARD_MCU_FAMILY_F1)
+  /* ---- 0) 关闭 JTAG, 只保留 SWD ----
+   *  ★ 这一步是必须的: STM32 复位后默认 SWJ = 全使能, PA13/PA14/PA15/PB3/PB4
+   *    被 JTAG 占用。而本板的片选是 PB0..PB3(4 片), 片数 >= 4 时 PB3 = JTDO,
+   *    不关 JTAG 的话 CS3 根本不是普通输出 —— 表现就是"第 4 片永远读不回来"。
+   *    (16 片老版本用的是 PB0..PB15, 当时没有这一步, CS3/CS4 实际是失效的。)
+   *    关掉 JTAG 后 SWD 仍然可用, 下载/调试完全不受影响。 */
+  __HAL_AFIO_REMAP_SWJ_NOJTAG();
+#endif
+
+  /* ---- 1) 片选 PB0..PB(CHIP_COUNT-1): 推挽输出, 50MHz, 初始高电平(释放) ---- */
   HAL_GPIO_WritePin(ADS1220_CS_PORT, ADS1220_CS_MASK_ALL, GPIO_PIN_SET);
   GPIO_InitStruct.Pin   = ADS1220_CS_MASK_ALL;
 #if defined(BOARD_MCU_FAMILY_F1)
@@ -109,20 +129,24 @@ void SPI_Driver_GpioInit(void)
 #endif
   HAL_GPIO_Init(ADS1220_CS_PORT, &GPIO_InitStruct);
 
-  /* ---- 2) 合并 DRDY: PA0 下降沿中断, 上拉 ----
-   *  74HC132 是推挽输出, 上拉只是"逻辑门没焊/掉电"时的保护;
-   *  ADS1220 的 DRDY 本身是主动驱动(CS 高时也驱动), 所以不会浮空。 */
-  GPIO_InitStruct.Pin  = ADS1220_DRDY_PIN;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  /* ---- 2) DRDY: 每片一根 PA0..PA3, 输入 + 内部上拉 ----
+   *  ADS1220 的 DRDY 是"主动驱动的推挽输出, CS 为高时也驱动"(SBAS501D 8.5.1.3),
+   *  所以严格来说不需要上拉; 这里加上内部上拉是为了:
+   *    a) 没贴芯片的焊盘 -> 该引脚被钳高 = "永远没有新数据", 不会悬空误触发;
+   *    b) 芯片还没上电/复位期间, 引脚不会因为浮空被读成随机的"就绪"。
+   *  低有效: 0 = 有新数据。 */
+  GPIO_InitStruct.Pin  = ADS1220_DRDY_MASK_ALL;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(ADS1220_DRDY_PORT, &GPIO_InitStruct);
 
-  /* ---- 3) NVIC ---- */
-  HAL_NVIC_SetPriority(ADS1220_DRDY_EXTI_IRQn, ADS1220_DRDY_IRQ_PRIO, 0u);
-  HAL_NVIC_EnableIRQ(ADS1220_DRDY_EXTI_IRQn);
+  /* 注意: 新方案没有 DRDY 中断, 因此不再配置 EXTI / NVIC。
+   *       原来的 EXTI0_IRQHandler 已经从 stm32f1xx_it.c 里移除。 */
 
-  /* 初始化后清掉上电过程中可能残留的挂起标志 */
-  __HAL_GPIO_EXTI_CLEAR_IT(ADS1220_DRDY_PIN);
+  /* ---- 3) 期望掩码复位成"全部片" ---- */
+  s_drdy_expected   = ADS1220_DRDY_MASK_ALL;
+  s_all_ready_latch = 0u;
+  s_drdy_ready_cnt  = 0u;
 
   /* ---- 4) DWT 延时基准 ---- */
   SPI_Driver_DwtInit();
@@ -172,7 +196,7 @@ void SPI_Driver_DelayMs(uint32_t ms)
   {
     return;
   }
-  HAL_Delay(ms);   /* 基于 SysTick, 会响应中断(DRDY/UART 仍能被服务) */
+  HAL_Delay(ms);   /* 基于 SysTick, 会响应中断(UART 仍能被服务) */
 }
 
 /*==============================================================================
@@ -258,50 +282,70 @@ SPI_Driver_Status_t SPI_Driver_Transfer(uint8_t chip,
 }
 
 /*==============================================================================
- * 合并 DRDY (PA0 / EXTI0)
+ * DRDY: 每片一根 -> 软件合成"全部就绪"
+ *
+ *  硬件: DRDY0..3 = PA0..PA3, 低有效, 输入 + 内部上拉, 无中断。
+ *  合成: 一次读 GPIOA->IDR 拿到全部 4 根线的电平 (单条指令, 天然原子),
+ *        取反后 bit n = 1 表示第 n 片有新数据。
  *============================================================================*/
-void SPI_Driver_DrdyIrqHandler(void)
+uint16_t SPI_Driver_DrdyReadyMask(void)
 {
-  /* ★ 中断服务程序里只做这一件事: 置标志位 + 递增计数。
-   *   绝对不要在这里做 SPI 读写 —— 一次 16 片的批量读取要几百微秒,
-   *   放在 ISR 里会拖垮 UART 接收并造成中断抖动。 */
-  s_drdy_flag = 1u;
-  s_drdy_irq_cnt++;
+  /* IDR 里 1 = 高 = 未就绪; 取反后 1 = 低 = 已就绪 (低有效) */
+  uint16_t idr = (uint16_t)ADS1220_DRDY_PORT->IDR;
+
+  return (uint16_t)((uint16_t)(~idr) & ADS1220_DRDY_MASK_ALL);
+}
+
+void SPI_Driver_DrdySetExpectedMask(uint16_t mask)
+{
+  /* 掩码里只保留本板实际存在的片 */
+  mask = (uint16_t)(mask & ADS1220_DRDY_MASK_ALL);
+
+  /* 传 0 没有意义(会变成"永远就绪"), 这时保持原值不动, 让上层超时并报错 */
+  if (mask != 0u)
+  {
+    s_drdy_expected = mask;
+  }
+}
+
+uint16_t SPI_Driver_DrdyExpectedMask(void)
+{
+  return s_drdy_expected;
 }
 
 uint8_t SPI_Driver_DrdyTakeFlag(void)
 {
-  uint8_t f;
+  uint16_t ready = SPI_Driver_DrdyReadyMask();
 
-  /* 关中断保护: 读-清 之间可能刚好来一个新的下降沿 */
-  SPI_DRV_CRITICAL_ENTER();
-  f = s_drdy_flag;
-  s_drdy_flag = 0u;
-  SPI_DRV_CRITICAL_EXIT();
+  if ((uint16_t)(ready & s_drdy_expected) == s_drdy_expected)
+  {
+    /* 只在"从没就绪 -> 全就绪"的那一次计数, 语义上等于老方案的下降沿计数 */
+    if (s_all_ready_latch == 0u)
+    {
+      s_all_ready_latch = 1u;
+      s_drdy_ready_cnt++;
+    }
+    return 1u;
+  }
 
-  return f;
+  s_all_ready_latch = 0u;
+  return 0u;
 }
 
 void SPI_Driver_DrdyClearFlag(void)
 {
-  SPI_DRV_CRITICAL_ENTER();
-  s_drdy_flag = 0u;
-  SPI_DRV_CRITICAL_EXIT();
+  s_all_ready_latch = 0u;
 }
 
 uint8_t SPI_Driver_DrdyLevel(void)
 {
-  /* 返回 0 表示 DRDY 有效(低) —— 至少一片 ADS1220 有未读走的数据 */
-  return (uint8_t)HAL_GPIO_ReadPin(ADS1220_DRDY_PORT, ADS1220_DRDY_PIN);
+  /* 返回 0 表示"低有效" = 需要的片都有未读走的数据 (与老合并 DRDY 语义一致) */
+  return SPI_Driver_DrdyTakeFlag() != 0u ? 0u : 1u;
 }
 
-uint32_t SPI_Driver_DrdyIrqCount(void)
+uint32_t SPI_Driver_DrdyReadyCount(void)
 {
-  uint32_t v;
-  SPI_DRV_CRITICAL_ENTER();
-  v = s_drdy_irq_cnt;
-  SPI_DRV_CRITICAL_EXIT();
-  return v;
+  return s_drdy_ready_cnt;
 }
 
 uint32_t SPI_Driver_ErrorCount(void)

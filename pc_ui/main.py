@@ -42,6 +42,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="演示模式: 用虚拟下位机产生数据 (无需硬件)")
     parser.add_argument("--samples", type=int, default=1000,
                         help="曲线保留的点数 (默认 1000)")
+    parser.add_argument("--channels", type=int, default=0,
+                        choices=[0, 4, 8, 16, 32],
+                        help="强制本板通道数 (4/8/16/32); 默认 0 = 自动跟随固件上报的片数")
     parser.add_argument("--data-dir", default="./data",
                         help="CSV 默认保存目录 (默认 ./data)")
     parser.add_argument("--over-temp", type=float, default=1000.0,
@@ -87,6 +90,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                          port=args.port,
                          baudrate=args.baud,
                          retention=args.samples,
+                         channels=args.channels,
                          record_dir=args.data_dir,
                          over_temp=args.over_temp,
                          auto_connect=not args.no_auto_connect)

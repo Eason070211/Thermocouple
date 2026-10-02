@@ -2,7 +2,8 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : 16 x ADS1220 / 32 路热电偶测温系统 主程序
+  * @brief          : N x ADS1220 / 2N 路热电偶测温系统 主程序
+  *                  (N = ADS1220_CHIP_COUNT, 默认 4 片 = 8 路; 改一个宏即可变 2/4/8 片)
   ******************************************************************************
   * @attention
   *
@@ -37,26 +38,34 @@
 /**
   * @brief 采集轮询状态机。
   *
-  *  === 为什么必须"广播 START/SYNC + 等一个转换周期"而不是"每片独立 DRDY" ===
-  *  16 片 ADS1220 的 DRDY 经 2x74HC30 + 74HC132 合并成 **一路** PA0 中断,
-  *  固件无法分辨是哪一片拉低的。所以采用:
+  *  === 为什么仍然"广播 START/SYNC + 等一个转换周期" ===
+  *  本板每片 ADS1220 各有一根 DRDY (PA0..PA3), 直接进 MCU, 不用外部逻辑门。
+  *  SPI 总线是**共享**的, 同一时刻只能跟一片说话, 所以还是采用"先让所有片
+  *  在时间上对齐, 再逐片读"的策略:
   *
-  *    1) 每次切换 MUX / TS 之后, 对 16 片 **逐片** 发 WREG + START/SYNC。
-  *       START/SYNC 会复位数字滤波器并重新开始转换, 于是 16 片在时间上重新对齐
-  *       (彼此相差只有几十微秒的 SPI 下发时间), 合并 DRDY 就变成一次干净的脉冲。
+  *    1) 每次切换 MUX / TS 之后, 对每片 **逐片** 发 WREG + START/SYNC。
+  *       START/SYNC 会复位数字滤波器并重新开始转换, 于是所有片在时间上重新对齐
+  *       (彼此只差几十微秒的 SPI 下发时间)。
   *    2) 等待期间同时满足两个条件才继续:
   *         a. 已经过了 >= 0.9 个转换周期 (保证读到的是新通道的数据, 不是上一次的);
-  *         b. 合并 DRDY 下降沿中断标志已置位 (ISR 只置标志位)。
-  *       超时 (转换周期 + 25ms) 则记一次故障并继续, 保证流程永不卡死。
-  *    3) 读完数据后, 该片的 DRDY 会在下一个 SCLK 上升沿自动变高, 合并信号随之恢复,
-  *       不需要任何"复位逻辑芯片"的操作。
+  *         b. 所有"被等待的片"的 DRDY 都变低 —— 由 SPI_Driver_DrdyTakeFlag()
+  *            把 N 根 DRDY 软件合成一个"全部就绪" (等价于原来的合并信号,
+  *            但多了一个能力: 能分辨出到底是哪一片没就绪)。
+  *       超时 (转换周期 + 25ms) 则记一次故障、把没就绪的片从等待集合里摘掉
+  *       (同时置 chip_err 位), 流程继续, 保证永不卡死。
+  *    3) 读完数据后, 该片的 DRDY 会在下一个 SCLK 上升沿自动变高,
+  *       "全部就绪"随之解除, 等待下一轮转换完成, 不需要任何复位操作。
+  *
+  *  ★ "被等待的片" = 上电回读校验通过的片 (见 App_StartWait / s_chip_ok_mask)。
+  *    这样"板上留了 4 个位置但只焊了 2 片"时, 没焊的片根本不在等待集合里,
+  *    既不会每轮超时, 也不会把采集拖慢 —— 这是分步贴装能直接跑通的关键。
   *
   *  一个完整轮次 = A 通道 -> 切 MUX -> B 通道 -> 切 TS -> 冷端 -> 恢复 + 上报,
   *  每个阶段各占 1 个转换周期 (20SPS 下 50ms), 因此 20SPS 时约 150ms/轮。
   */
 typedef enum
 {
-  APP_ST_STOPPED = 0,   /**< 已停止 (16 片处于 POWERDOWN) */
+  APP_ST_STOPPED = 0,   /**< 已停止 (所有片处于 POWERDOWN) */
   APP_ST_WAIT_A,        /**< 等 A 通道 (AIN0/AIN1) 转换完成 */
   APP_ST_WAIT_B,        /**< 等 B 通道 (AIN2/AIN3) 转换完成 */
   APP_ST_WAIT_T         /**< 等内部温度传感器 (冷端) 转换完成 */
@@ -67,8 +76,9 @@ typedef enum
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-/** 采集运行中, 超过这个时间一次 DRDY 都没来 -> 置"DRDY 静默"故障位。
- *  16 片 x 20SPS = 理论 320 次/秒, 1 秒没有一次说明总线或器件出问题了。 */
+/** 采集运行中, 超过这个时间一次"全部就绪"都没出现 -> 置"DRDY 静默"故障位。
+ *  正常运行时每个转换周期至少来一次 (20SPS x 3 阶段 ≈ 20 次/秒),
+ *  1 秒都没有说明总线或器件出问题了。 */
 #define TC_DRDY_SILENT_MS      1000u
 
 /* USER CODE END PD */
@@ -83,7 +93,7 @@ typedef enum
 /* USER CODE BEGIN PV */
 
 /*---- 配置与采集数据 ----*/
-static ADS1220_Config_t s_cfg;                                  /**< 16 片共用配置镜像 */
+static ADS1220_Config_t s_cfg;                                  /**< 各片共用配置镜像 */
 
 static int32_t  s_codeA[ADS1220_CHIP_COUNT];                    /**< A 通道 24bit 码值 */
 static int32_t  s_codeB[ADS1220_CHIP_COUNT];                    /**< B 通道 24bit 码值 */
@@ -93,7 +103,12 @@ static uint8_t  s_errA[ADS1220_CHIP_COUNT];                     /**< 0 = SPI 成
 static uint8_t  s_errB[ADS1220_CHIP_COUNT];
 static uint8_t  s_errT[ADS1220_CHIP_COUNT];
 
-static float    s_temps[TC_CHANNEL_COUNT];                      /**< 32 路最终温度 °C */
+/** 本板实际通道的最终温度 (长度 = 片数 x 2) */
+static float    s_temps[TC_CHANNEL_COUNT];
+
+/** 上报用的 32 槽缓冲区。协议固定 32 槽, 本板没接的槽位填 NaN。
+ *  (上位机靠状态帧里的片数知道哪几路是真实存在的) */
+static float    s_report[UART_TEMP_SLOT_COUNT];
 
 /*---- 状态 ----*/
 static App_State_t s_state;
@@ -105,6 +120,8 @@ static uint8_t   s_hold_b;                                      /**< MUX 保持�
 
 static uint16_t  s_chip_ok_mask;                                /**< 上电回读校验通过的片 */
 static uint16_t  s_chip_err_mask;                               /**< 本轮 SPI 出错的片 */
+static uint16_t  s_drdy_missing_mask;                           /**< 一直不就绪的片(没焊/坏了) */
+static uint16_t  s_wait_mask;                                   /**< 本阶段实际要等的片 */
 static uint32_t  s_round_count;                                 /**< 已完成轮次 */
 static uint16_t  s_open_cnt;                                    /**< 断线累计次数 */
 static uint16_t  s_phase_timeout_cnt;                           /**< 等待 DRDY 超时次数 */
@@ -158,6 +175,7 @@ static void    App_HwInit(void);
 static void App_StartWait(void)
 {
   const ADS1220_RateInfo_t *ri = ADS1220_RateInfo(s_cfg.dr);
+  uint16_t configured = (uint16_t)((1u << ADS1220_CHIP_COUNT) - 1u);
 
   /* 最小等待 = 0.9 x 实际转换时间, 宁可晚一点也不要把上一通道的旧数据当新的 */
   s_wait_min_ms = (ri->conv_us * ADS1220_WAIT_MIN_NUM) /
@@ -170,13 +188,26 @@ static void App_StartWait(void)
   /* 超时 = 转换时间 + 25ms 裕量 */
   s_wait_max_ms = (ri->conv_us / 1000u) + ADS1220_WAIT_MARGIN_MS;
 
-  SPI_Driver_DrdyClearFlag();           /* 清掉 START 之前的残留边沿 */
+  /* ★ 本阶段要等的片 = 上电回读校验通过 且 没有"一直不就绪"记录的片。
+   *   这样"板上留了 4 个位置但只焊了 2 片"时, 没焊的片不在等待集合里,
+   *   既不会每轮白等 25ms, 也不会把整轮采集拖慢。 */
+  s_wait_mask = (uint16_t)(s_chip_ok_mask &
+                           (uint16_t)(~s_drdy_missing_mask) &
+                           configured);
+  if (s_wait_mask == 0u)
+  {
+    /* 一片都没通过校验 (例如校验还没跑过) -> 退化成等全部, 让它超时并如实报错 */
+    s_wait_mask = configured;
+  }
+  SPI_Driver_DrdySetExpectedMask(s_wait_mask);
+
+  SPI_Driver_DrdyClearFlag();           /* 清掉 START 之前的残留"全就绪"锁存 */
   s_wait_start = HAL_GetTick();
 }
 
 /**
   * @brief 查询等待是否结束
-  * @retval 0 = 继续等; 1 = 等到 DRDY; 2 = 超时
+  * @retval 0 = 继续等; 1 = 所有被等的片都就绪; 2 = 超时
   */
 static uint8_t App_WaitDone(void)
 {
@@ -184,16 +215,30 @@ static uint8_t App_WaitDone(void)
 
   if (elapsed < s_wait_min_ms)
   {
-    return 0u;                          /* 还没到最小建立时间, 边沿一律忽略 */
+    return 0u;                          /* 还没到最小建立时间, 一律忽略 */
   }
 
   if (SPI_Driver_DrdyTakeFlag() != 0u)
   {
-    return 1u;                          /* 中断里置的标志位被主循环消费 */
+    return 1u;                          /* 所有被等的片都有新数据了 */
   }
 
   if (elapsed >= s_wait_max_ms)
   {
+    /* ★ 超时诊断: 是哪几片没就绪? 把它们记进 chip_err 并从等待集合里摘掉,
+     *   避免后面每一轮都在它们身上白等 25ms。摘掉之后, 上位机右侧的
+     *   "芯片 ERR 位图"就能直接指出问题片号 (没焊 / 虚焊 / 供电异常)。 */
+    uint16_t ready   = SPI_Driver_DrdyReadyMask();
+    uint16_t missing = (uint16_t)(s_wait_mask & (uint16_t)(~ready));
+
+    if (missing != 0u)
+    {
+      s_drdy_missing_mask |= missing;
+      s_chip_err_mask     |= missing;
+      s_flags             |= UART_ST_FLAG_DRDY_PARTIAL;
+      s_wait_mask          = (uint16_t)(s_wait_mask & (uint16_t)(~missing));
+      SPI_Driver_DrdySetExpectedMask(s_wait_mask);   /* 传 0 时内部会保持原值 */
+    }
     return 2u;                          /* 超时: 器件没响应 */
   }
 
@@ -237,9 +282,12 @@ static void App_ComputeTemps(void)
     s_temps[ia] = UART_NaN();
     s_temps[ib] = UART_NaN();
 
-    /* 上电回读校验没通过的片子直接跳过 (避免把"没焊的芯片读回全 0"
-     * 当成 0uV 而报出一个看起来正常的冷端温度) */
-    if ((s_chip_ok_mask & (uint16_t)(1u << chip)) == 0u)
+    /* 跳过两类片:
+     *   a) 上电回读校验没通过 (没焊/虚焊) —— 避免把"空总线读回的全 0"
+     *      当成 0uV, 从而报出一个看起来正常的冷端温度;
+     *   b) 采集过程中一直不就绪的片 (由 App_WaitDone 的超时诊断标出来)。 */
+    if (((s_chip_ok_mask & (uint16_t)(1u << chip)) == 0u) ||
+        ((s_drdy_missing_mask & (uint16_t)(1u << chip)) != 0u))
     {
       s_chip_err_mask |= (uint16_t)(1u << chip);
       continue;
@@ -298,26 +346,36 @@ static void App_ComputeTemps(void)
  *============================================================================*/
 static void App_ReportTemps(void)
 {
-  /* 单通道请求: 只保留目标通道, 其余填 NaN */
+  uint16_t i;
+
+  /* 1) 先把 32 个槽位全部填成 NaN。
+   *    ★ 协议固定 32 槽, 本板没接的通道就保持 NaN —— 上位机看到 NaN 就知道
+   *      "这一路不存在/断线", 而且 4 路板 / 8 路板 / 16 路板共用同一套上位机。 */
+  for (i = 0u; i < UART_TEMP_SLOT_COUNT; i++)
+  {
+    s_report[i] = UART_NaN();
+  }
+
   if ((s_single_mode != 0u) && (s_single_ch != UART_CH_SINGLE_ALL))
   {
-    static float one[TC_CHANNEL_COUNT];
-    uint8_t i;
-
-    for (i = 0u; i < TC_CHANNEL_COUNT; i++)
+    /* 2a) 单通道请求: 32 槽里只放目标通道那一个值, 其余保持 NaN */
+    if (s_single_ch < UART_TEMP_SLOT_COUNT)
     {
-      one[i] = UART_NaN();
+      s_report[s_single_ch] = (s_single_ch < TC_CHANNEL_COUNT)
+                              ? s_temps[s_single_ch]
+                              : UART_NaN();
     }
-    if (s_single_ch < TC_CHANNEL_COUNT)
-    {
-      one[s_single_ch] = s_temps[s_single_ch];
-    }
-    (void)UART_Protocol_SendTempFrame(one);
   }
   else
   {
-    (void)UART_Protocol_SendTempFrame(s_temps);
+    /* 2b) 正常上报: 把本板实际通道拷进前 TC_CHANNEL_COUNT 个槽位 */
+    for (i = 0u; i < TC_CHANNEL_COUNT; i++)
+    {
+      s_report[i] = s_temps[i];
+    }
   }
+
+  (void)UART_Protocol_SendTempFrame(s_report);
 }
 
 static void App_StatusFill(UART_Status_t *st)
@@ -325,11 +383,14 @@ static void App_StatusFill(UART_Status_t *st)
   st->run_state      = s_run;
   st->dr_bits        = s_cfg.dr;
   st->reject         = s_cfg.reject;
+  /* ★ 上报本板实际片数: 上位机据此只显示真实存在的通道
+   *   (没接的槽位虽然也发了, 但值恒为 NaN, 不必显示成"断线"吓人) */
+  st->chip_count     = (uint8_t)ADS1220_CHIP_COUNT;
   st->chip_ok_mask   = s_chip_ok_mask;
   st->chip_err_mask  = s_chip_err_mask;
   st->round_count    = s_round_count;
   st->uptime_ms      = HAL_GetTick();
-  st->drdy_irq_count = (uint16_t)(SPI_Driver_DrdyIrqCount() & 0xFFFFu);
+  st->drdy_irq_count = (uint16_t)(SPI_Driver_DrdyReadyCount() & 0xFFFFu);
   st->spi_err_count  = (uint16_t)(SPI_Driver_ErrorCount() & 0xFFFFu);
   st->open_tc_count  = s_open_cnt;
   st->phase_timeout_count = s_phase_timeout_cnt;
@@ -372,12 +433,13 @@ static void App_Start(void)
   s_hold_a      = 0u;
   s_hold_b      = 0u;
   s_chip_err_mask = 0u;
+  s_drdy_missing_mask = 0u;   /* 每次启动都重新信任一次: 重新校验过就再等它 */
   s_state       = APP_ST_WAIT_A;
 
   App_StartWait();
 }
 
-/** 停止采集: 16 片进入 POWERDOWN (寄存器值保持, 下次 START/SYNC 即可恢复)。 */
+/** 停止采集: 所有片进入 POWERDOWN (寄存器值保持, 下次 START/SYNC 即可恢复)。 */
 static void App_Stop(void)
 {
   s_run         = 0u;
@@ -414,7 +476,7 @@ static void App_SetRate(uint8_t dr_bits, uint8_t reject)
   }
 }
 
-/** 单次读取: 无论当前在哪个阶段, 都把 16 片拉回 CH_A + TS=0 重新跑一整轮。 */
+/** 单次读取: 无论当前在哪个阶段, 都把所有片拉回 CH_A + TS=0 重新跑一整轮。 */
 static void App_RequestSingle(uint8_t channel)
 {
   s_single_ch   = (channel < TC_CHANNEL_COUNT) ? channel : UART_CH_SINGLE_ALL;
@@ -475,7 +537,7 @@ static void App_HandleEvent(const UART_EventMsg_t *msg)
 static void App_Housekeeping(void)
 {
   uint32_t now = HAL_GetTick();
-  uint32_t cnt = SPI_Driver_DrdyIrqCount();
+  uint32_t cnt = SPI_Driver_DrdyReadyCount();
 
   if (cnt != s_last_drdy_cnt)
   {
@@ -549,7 +611,7 @@ static void App_Run(void)
       }
       s_hold_a = 0u;
 
-      /* 切到 B 通道, 并用 START/SYNC 让 16 片重新同步 */
+      /* 切到 B 通道, 并用 START/SYNC 让所有片重新同步 */
       (void)ADS1220_SetMuxAll(ADS1220_MUX_AIN2_AIN3);
       (void)ADS1220_StartAll();
       App_StartWait();
@@ -621,7 +683,7 @@ static void App_Run(void)
        * 保留到下一轮开始, 这样周期性的状态帧能读到本轮的故障信息。 */
       App_ComputeTemps();
 
-      /* 上报 32 路温度 (CMD=0x10) */
+      /* 上报温度帧 (CMD=0x10, 固定 32 槽, 没接的槽位是 NaN) */
       App_ReportTemps();
 
       s_round_count++;
@@ -675,14 +737,20 @@ static void App_HwInit(void)
   ADS1220_DefaultConfig(&s_cfg);
 
   /* ---- 4) 上电初始化:
-   *        >=50ms 等待 -> 16 片 RESET(0x06) -> 1ms -> WREG 4 字节
+   *        >=50ms 等待 -> 逐片 RESET(0x06) -> 1ms -> WREG 4 字节
    *        -> 回读校验 -> START/SYNC(0x08)                       ---- */
   (void)ADS1220_PowerUpInit(&s_cfg, &ok_mask);
   s_chip_ok_mask = ok_mask;
   if (ok_mask != (uint16_t)((1u << ADS1220_CHIP_COUNT) - 1u))
   {
+    /* 有片没通过回读校验: 最常见的原因就是"板上留了位置但还没焊",
+     * 上位机状态帧的"芯片 ERR 位图"会直接指出是第几片。 */
     s_flags |= UART_ST_FLAG_VERIFY_FAIL;
   }
+
+  /* ★ 把"要等待就绪"的集合收窄成校验通过的片:
+   *   没焊的片 DRDY 被内部上拉钳高, 如果还等它, 每一轮都会白等 25ms 超时。 */
+  SPI_Driver_DrdySetExpectedMask(ok_mask);
 
   /* ---- 5) 内部短路失调校准 (手册 9.1.5; ADS1220 没有 "SELF CAL 0x04" 指令,
    *        这是等效且正确的做法)。默认 4 次平均, 耗时约 200ms。 ---- */
@@ -708,7 +776,7 @@ static void App_HwInit(void)
   /* ---- 6) 启动连续采集 ---- */
   App_Start();
 
-  s_last_drdy_cnt   = SPI_Driver_DrdyIrqCount();
+  s_last_drdy_cnt   = SPI_Driver_DrdyReadyCount();
   s_last_drdy_tick  = HAL_GetTick();
   s_status_push_tick = HAL_GetTick();
 }
@@ -748,7 +816,7 @@ int main(void)
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
 
-  App_HwInit();     /* 自检 -> 复位/配置 16 片 ADS1220 -> 失调校准 -> 启动采集 */
+  App_HwInit();     /* 自检 -> 复位/配置所有 ADS1220 -> 失调校准 -> 启动采集 */
 
   /* USER CODE END 2 */
 

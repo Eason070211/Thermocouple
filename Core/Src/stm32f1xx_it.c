@@ -203,33 +203,20 @@ void SysTick_Handler(void)
 
 /* USER CODE BEGIN 1 */
 
-/**
-  * @brief 合并 DRDY 中断 (PA0 / EXTI0, 下降沿)。
-  *
-  *  16 片 ADS1220 的 DRDY 经 2x74HC30 + 1x74HC132 与非后合并到这里:
-  *      合并输出 = 低  <=>  至少有一片产生了新的转换结果
-  *  器件 DRDY 是主动驱动的推挽输出(CS 为高时也驱动), 所以可以直接进逻辑门。
-  *
-  *  ★ 这里 **只置一个标志位**, 不做任何 SPI 读写 —— 16 片批量读取要几百微秒,
-  *    放在 ISR 里会严重拖长中断、挤掉串口接收, 并且破坏"中断应该尽量短"的原则。
-  *    真正的读取在 main.c 的 App_Run() 里根据 SPI_Driver_DrdyTakeFlag() 完成。
-  */
-void EXTI0_IRQHandler(void)
-{
-  /* USER CODE BEGIN EXTI0_IRQn 0 */
-
-  /* USER CODE END EXTI0_IRQn 0 */
-
-  if (__HAL_GPIO_EXTI_GET_IT(ADS1220_DRDY_PIN) != RESET)
-  {
-    __HAL_GPIO_EXTI_CLEAR_IT(ADS1220_DRDY_PIN);   /* 先清挂起位, 防止丢边沿 */
-    SPI_Driver_DrdyIrqHandler();                  /* 只置标志位 + 计数 */
-  }
-
-  /* USER CODE BEGIN EXTI0_IRQn 1 */
-
-  /* USER CODE END EXTI0_IRQn 1 */
-}
+/*----------------------------------------------------------------------------
+ * 关于 DRDY 中断 (已移除)
+ *
+ *  16 片版本: DRDY 经 2x74HC30 + 74HC132 与非合并成一路 -> PA0/EXTI0 下降沿,
+ *             这里曾经有一个只置标志位的 EXTI0_IRQHandler。
+ *
+ *  8 路版本: 每片 DRDY 各占一根 MCU 引脚 (PA0..PA3), **不使用中断**,
+ *             由 SPI_Driver_DrdyTakeFlag() 在主循环里轮询并软件合成"全部就绪"。
+ *             原因:
+ *               - 只有 4 片, 轮询的开销可以忽略 (每次就是一条 IDR 读取);
+ *               - 不用外部逻辑门, 省掉一颗芯片和它的去耦;
+ *               - 没有 ISR 就不存在"读-清标志位"的竞态, 也没有中断优先级顾虑。
+ *             因此 EXTI0_IRQHandler 已删除, NVIC 也不再配置 (见 spi_driver.c)。
+ *--------------------------------------------------------------------------*/
 
 /**
   * @brief USART1 全局中断。

@@ -73,7 +73,14 @@ extern "C" {
 #define UART_DATA_MAX_LEN      200u    /**< 允许的最大 DATA 长度 */
 #define UART_FRAME_MAX_LEN     (3u + UART_DATA_MAX_LEN + 2u)
 
-#define UART_TEMP_DATA_LEN     (TC_CHANNEL_COUNT * 4u)   /**< 32 x float32 = 128 */
+/** ★ 协议温度槽位数: 与板子实际通道数**无关**, 永远是 32。
+ *
+ *  这样做的好处: 4 路板 / 8 路板 / 16 路板 用**完全相同的协议和上位机软件**,
+ *  没接的槽位填 NaN (0x7FC00000), 上位机显示成"未配置/断线"。
+ *  状态帧里会上报"本板实际片数", 上位机据此只显示真实存在的通道。 */
+#define UART_TEMP_SLOT_COUNT   32u
+/** 温度帧 DATA 长度 = 32 x float32 = 128 字节 (固定) */
+#define UART_TEMP_DATA_LEN     (UART_TEMP_SLOT_COUNT * 4u)
 #define UART_STATUS_DATA_LEN   24u
 
 #define UART_CH_SINGLE_ALL     0xFFu   /**< CMD=0x03 时表示"全部通道" */
@@ -92,7 +99,7 @@ extern "C" {
  *============================================================================*/
 #define UART_ST_RUN_STATE      0u   /**< u8  0=停止 1=运行 */
 #define UART_ST_DR_BITS        1u   /**< u8  当前 DR[2:0] (已移位值) */
-#define UART_ST_REJECT         2u   /**< u8  当前 50/60[1:0] (已移位值) */
+#define UART_ST_REJECT         2u   /**< u8  高4位=50/60[1:0](已移位值), 低4位=本板片数 */
 #define UART_ST_CHIP_OK_LO     3u   /**< u16 小端: bit n=1 第 n 片通信正常 */
 #define UART_ST_CHIP_OK_HI     4u
 #define UART_ST_CHIP_ERR_LO    5u   /**< u16 小端: bit n=1 第 n 片本轮出错 */
@@ -113,10 +120,11 @@ extern "C" {
 
 /* 状态帧 flags 位定义 */
 #define UART_ST_FLAG_SELFTEST   0x01u  /**< 上电自检失败 (热电偶多项式) */
-#define UART_ST_FLAG_DRDY_SILENT 0x02u /**< 长时间收不到 DRDY (16 片都哑了?) */
-#define UART_ST_FLAG_VERIFY_FAIL 0x04u /**< 上电回读校验不通过 */
+#define UART_ST_FLAG_DRDY_SILENT 0x02u /**< 长时间收不到 DRDY (所有片都哑了?) */
+#define UART_ST_FLAG_VERIFY_FAIL 0x04u /**< 上电回读校验不通过 (有片没焊/虚焊?) */
 #define UART_ST_FLAG_TX_OVERFLOW 0x08u /**< 串口发送缓冲溢出(丢过帧) */
 #define UART_ST_FLAG_CRC_ERR     0x10u /**< 收到过 CRC 错的下行帧 */
+#define UART_ST_FLAG_DRDY_PARTIAL 0x20u /**< ★新增: 有片一直不就绪(看 chip_err 位图定位) */
 
 /*==============================================================================
  * 事件
@@ -143,12 +151,13 @@ typedef struct
 {
   uint8_t  run_state;
   uint8_t  dr_bits;
-  uint8_t  reject;
+  uint8_t  reject;            /**< 已移位的 50/60[1:0] (0x00/0x10/0x20/0x30) */
+  uint8_t  chip_count;        /**< ★本板实际片数 (1..16), 填进状态帧 byte2 低 4 位 */
   uint16_t chip_ok_mask;
   uint16_t chip_err_mask;
   uint32_t round_count;
   uint32_t uptime_ms;
-  uint16_t drdy_irq_count;
+  uint16_t drdy_irq_count;    /**< "全部就绪"次数 (老版本是合并 DRDY 中断次数) */
   uint16_t spi_err_count;
   uint16_t open_tc_count;
   uint16_t phase_timeout_count;
@@ -179,8 +188,11 @@ uint16_t UART_CRC16(const uint8_t *data, uint16_t len);
 /** 通用组帧发送: 自动加 0x55 帧头 / LEN / CRC。 @retval 1 = 已入队, 0 = 缓冲满已丢弃 */
 uint8_t UART_Protocol_SendFrame(uint8_t cmd, const uint8_t *data, uint8_t len);
 
-/** 上报 32 路温度 (CMD=0x10)。temps 里 NaN 会被原样发出表示无效。 */
-uint8_t UART_Protocol_SendTempFrame(const float temps[TC_CHANNEL_COUNT]);
+/** 上报温度帧 (CMD=0x10)。
+ *  ★ 固定 32 个槽位 (UART_TEMP_SLOT_COUNT), 与板子通道数无关;
+ *    本板没接的槽位由 main.c 填 NaN, 上位机会显示成"未配置"。
+ *    temps 里 NaN 会被原样发出表示无效。 */
+uint8_t UART_Protocol_SendTempFrame(const float temps[UART_TEMP_SLOT_COUNT]);
 
 /** 上报状态 (CMD=0x11)。 */
 uint8_t UART_Protocol_SendStatusFrame(const UART_Status_t *st);
