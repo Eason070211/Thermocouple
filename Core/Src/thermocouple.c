@@ -192,6 +192,38 @@ float TC_CompensateHotJunction(float emf_tc_uv, float cj_c)
 }
 
 /*==============================================================================
+ * 断线判定 (不含任何多项式运算 —— "温度交给上位机算"时也能用)
+ *============================================================================*/
+uint8_t TC_IsOpen(float emf_tc_uv, float cj_c, int32_t raw_code)
+{
+  /* ---- 1) 冷端温度必须落在 ADS1220 内部温度传感器的工作范围内 ---- */
+  if ((cj_c < TC_CJ_MIN_C) || (cj_c > TC_CJ_MAX_C))
+  {
+    return 1u;
+  }
+
+  /* ---- 2) 码值被拉死到 ±满量程 (断线最典型的表现) ----
+   *  手册 9.2.1.2: 断线后 10uA 烧断电流源 / 偏置电阻把 AINP/AINN 推到两极,
+   *  "The ADC consequently reads a full-scale value"。
+   *  ★ 这一条与分度号无关, 是最可靠的判据, 也是关掉 TC_OPEN_EMF_CHECK 后
+   *    仍然能识别开路的原因。 */
+  if ((raw_code >= TC_ADC_CODE_POS_FS) || (raw_code <= TC_ADC_CODE_NEG_FS))
+  {
+    return 1u;
+  }
+
+#if (TC_OPEN_EMF_CHECK != 0)
+  /* ---- 3) 换算出的热电势超出物理窗口 (辅助判据, 分度号相关) ---- */
+  if ((emf_tc_uv > TC_K_EMF_OPEN_HI_UV) || (emf_tc_uv < TC_K_EMF_OPEN_LO_UV))
+  {
+    return 1u;
+  }
+#endif
+
+  return 0u;
+}
+
+/*==============================================================================
  * 一次算完 + 断线判定
  *============================================================================*/
 void TC_Compute(float emf_tc_uv, float cj_c, int32_t raw_code, TC_Result_t *r)
@@ -211,31 +243,14 @@ void TC_Compute(float emf_tc_uv, float cj_c, int32_t raw_code, TC_Result_t *r)
   r->open      = 0u;
   r->valid     = 0u;
 
-  /* ---- 1) 冷端温度必须落在 ADS1220 内部温度传感器的工作范围内 ---- */
-  if ((cj_c < TC_CJ_MIN_C) || (cj_c > TC_CJ_MAX_C))
+  /* ---- 1) 断线/超量程判定 (与 TC_IsOpen() 同一套依据) ---- */
+  if (TC_IsOpen(emf_tc_uv, cj_c, raw_code) != 0u)
   {
     r->open = 1u;
     return;
   }
 
-  /* ---- 2) 断线判定 (两种独立依据, 任一命中即判开路) ---- */
-  /*  a) 码值被拉死到 ±满量程: 断线后 10uA 烧断电流源 / 偏置电阻把 AINP/AINN
-   *     推到两极 (手册 9.2.1.2: "the biasing resistors pull the analog inputs to
-   *     AVDD and AVSS... The ADC consequently reads a full-scale value")       */
-  if ((raw_code >= TC_ADC_CODE_POS_FS) || (raw_code <= TC_ADC_CODE_NEG_FS))
-  {
-    r->open = 1u;
-    return;
-  }
-  /*  b) 换算出的热电势超出 K 型物理量程
-   *     (合法范围约为 [-9400, +56413] µV, 见 thermocouple.h 说明)            */
-  if ((emf_tc_uv > TC_K_EMF_OPEN_HI_UV) || (emf_tc_uv < TC_K_EMF_OPEN_LO_UV))
-  {
-    r->open = 1u;
-    return;
-  }
-
-  /* ---- 3) 冷端补偿: V = V_TC + E(T_CJ), 再反解热端温度 ---- */
+  /* ---- 2) 冷端补偿: V = V_TC + E(T_CJ), 再反解热端温度 ---- */
   emf_cj = TC_K_EmfMicroVolt(cj_c);
   sum    = emf_tc_uv + emf_cj;
 

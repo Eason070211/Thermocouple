@@ -31,11 +31,13 @@ import time
 from typing import Dict, List, Optional
 
 try:                                  # 允许 "python pc_ui/main.py" 直接跑
-    from .protocol import (FRAME_GAP_S, HEAD_UP, CMD_UP_STATUS, CMD_UP_TEMP,
-                           FrameParser, build_frame, parse_status, parse_temp)
+    from .protocol import (FRAME_GAP_S, HEAD_UP, CMD_UP_RAW, CMD_UP_STATUS,
+                           CMD_UP_TEMP, FrameParser, build_frame, parse_raw,
+                           parse_status, parse_temp)
 except ImportError:                   # pragma: no cover
-    from protocol import (FRAME_GAP_S, HEAD_UP, CMD_UP_STATUS, CMD_UP_TEMP,
-                          FrameParser, build_frame, parse_status, parse_temp)
+    from protocol import (FRAME_GAP_S, HEAD_UP, CMD_UP_RAW, CMD_UP_STATUS,
+                          CMD_UP_TEMP, FrameParser, build_frame, parse_raw,
+                          parse_status, parse_temp)
 
 try:
     import serial
@@ -210,6 +212,11 @@ class SerialReader(threading.Thread):
         for cmd, payload in self._parser.feed(chunk):
             if cmd == CMD_UP_TEMP:
                 self._emit(type="temp", t=now, temps=parse_temp(payload),
+                           length=len(payload))
+            elif cmd == CMD_UP_RAW:
+                # ★ 原始帧: 固件只给 µV + 冷端 °C, 温度由 UI 层查分度表算
+                emf_uv, cj_c = parse_raw(payload)
+                self._emit(type="raw", t=now, emf_uv=emf_uv, cj_c=cj_c,
                            length=len(payload))
             elif cmd == CMD_UP_STATUS:
                 status = parse_status(payload)

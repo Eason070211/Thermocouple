@@ -33,18 +33,36 @@ import numpy as np
 import pandas as pd
 
 try:                                  # 允许 "python pc_ui/main.py" 直接跑
-    from .protocol import CHANNEL_COUNT, CHIP_COUNT
+    from .protocol import CHANNEL_COUNT, CHIP_COUNT, CJ_SLOT_COUNT
 except ImportError:                   # pragma: no cover
-    from protocol import CHANNEL_COUNT, CHIP_COUNT
+    from protocol import CHANNEL_COUNT, CHIP_COUNT, CJ_SLOT_COUNT
 
+#: 温度 CSV 的列。
+#: ★ 除了算好的温度 (ch00..)，还同时存**原始热电势** (uv00..) 和**冷端温度** (cj00..)。
+#:   这几个原始量是"换分度表后离线重算"的全部输入:
+#:       hot = table.compensate_hot_junction(uv[ch], cj[ch // 2])
+#:   所以哪怕当初用 K 型录的数据，事后换成 J 型表也能重新算一遍，
+#:   不需要重新做实验。温度帧模式 (固件自己算) 下这两组列填 NaN。
 TEMP_COLUMNS = ["iso_time", "unix_ts", "elapsed_s", "valid_count"] + \
-               ["ch%02d" % i for i in range(CHANNEL_COUNT)]
+               ["ch%02d" % i for i in range(CHANNEL_COUNT)] + \
+               ["uv%02d" % i for i in range(CHANNEL_COUNT)] + \
+               ["cj%02d" % i for i in range(CJ_SLOT_COUNT)]
 
 STATUS_COLUMNS = ["iso_time", "unix_ts", "elapsed_s", "run", "dr_sps", "reject",
                   "chip_ok", "chip_err", "rounds", "uptime_ms", "drdy_cnt",
                   "spi_err", "open_cnt", "timeout_cnt", "flags", "flag_text"]
 
 _SENTINEL_STOP = "__STOP__"
+
+
+def _pad_to(seq: Optional[Sequence[float]], n: int) -> np.ndarray:
+    """把可选序列补齐/截断到 n 个 float; ``None`` -> 全 NaN。"""
+    if seq is None:
+        return np.full(n, np.nan)
+    a = np.asarray(list(seq), dtype=float)
+    if a.size < n:
+        a = np.concatenate([a, np.full(n - a.size, np.nan)])
+    return a[:n]
 
 
 def build_filename(prefix: str, when: Optional[datetime] = None,
@@ -154,11 +172,23 @@ class DataRecorder(threading.Thread):
     # ------------------------------------------------------------------
     # 数据入口 (UI 线程调用, 非阻塞)
     # ------------------------------------------------------------------
-    def submit(self, t: float, temps: Sequence[float]) -> None:
-        """提交一行温度 (32 路, 无效通道填 NaN)。"""
+    def submit(self, t: float, temps: Sequence[float],
+               emf_uv: Optional[Sequence[float]] = None,
+               cj_c: Optional[Sequence[float]] = None) -> None:
+        """提交一行温度 (32 路, 无效通道填 NaN)。
+
+        :param emf_uv: 可选的 32 路原始热电势 (µV, 来自 CMD=0x12)。
+                       一起存下来, 以后换分度表可以**离线重算**历史数据。
+        :param cj_c:   可选的 16 路冷端温度 (°C)。重算时同样必需 —— 冷端补偿
+                       必须由同一个算法完成, 只存 µV 是算不出热端温度的。
+        """
         if not self.active:
             return
-        self._put(("temp", t, list(temps)[:CHANNEL_COUNT]))
+        self._put(("temp", t, (
+            list(temps)[:CHANNEL_COUNT],
+            None if emf_uv is None else list(emf_uv)[:CHANNEL_COUNT],
+            None if cj_c is None else list(cj_c)[:CJ_SLOT_COUNT],
+        )))
 
     def submit_status(self, t: float, status: Dict) -> None:
         """提交一行状态帧。"""
@@ -231,14 +261,22 @@ class DataRecorder(threading.Thread):
     # ------------------------------------------------------------------
     # 行构造 / 落盘
     # ------------------------------------------------------------------
-    def _make_temp_row(self, t: float, temps: Sequence[float]) -> list:
+    def _make_temp_row(self, t: float, payload) -> list:
+        """payload = (temps, emf_uv|None, cj_c|None) -> 一行 CSV。
+
+        emf_uv / cj_c 为 None (固件发的是温度帧) 时, 对应列填 NaN,
+        列集合保持不变 —— 这样同一个 CSV 里两种来源的行都能放。
+        """
+        temps, emf_uv, cj_c = payload
         values = np.asarray(list(temps), dtype=float)
         if values.size < CHANNEL_COUNT:
             values = np.concatenate([values, np.full(CHANNEL_COUNT - values.size, np.nan)])
         valid = int(np.count_nonzero(~np.isnan(values)))
         return [datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],
                 round(float(t), 6), round(float(t) - self._t0, 4), valid] + \
-               [float(v) for v in values]
+               [float(v) for v in values] + \
+               [float(v) for v in _pad_to(emf_uv, CHANNEL_COUNT)] + \
+               [float(v) for v in _pad_to(cj_c, CJ_SLOT_COUNT)]
 
     def _make_status_row(self, t: float, status: Dict) -> list:
         return [datetime.fromtimestamp(t).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3],

@@ -26,16 +26,18 @@ from typing import Dict, Optional
 
 try:                                  # 允许 "python pc_ui/main.py" 直接跑
     from .protocol import (CHANNEL_COUNT, CHIP_COUNT, CMD_DOWN_RUN, CMD_DOWN_SET_RATE,
-                           CMD_DOWN_SINGLE, CMD_UP_STATUS, CMD_UP_TEMP, DR_TABLE,
-                           HEAD_DOWN, HEAD_UP, REJECT_TABLE, STATUS_DATA_LEN,
-                           FrameParser, build_frame, build_temp_frame, parse_status,
-                           parse_temp)
+                           CMD_DOWN_SINGLE, CMD_UP_RAW, CMD_UP_STATUS, CMD_UP_TEMP,
+                           DR_TABLE, HEAD_DOWN, HEAD_UP, REJECT_TABLE,
+                           ST_FLAG_RAW_UPLINK, STATUS_DATA_LEN, FrameParser,
+                           build_frame, build_raw_frame, build_temp_frame,
+                           parse_raw, parse_status, parse_temp)
 except ImportError:                   # pragma: no cover
     from protocol import (CHANNEL_COUNT, CHIP_COUNT, CMD_DOWN_RUN, CMD_DOWN_SET_RATE,
-                          CMD_DOWN_SINGLE, CMD_UP_STATUS, CMD_UP_TEMP, DR_TABLE,
-                          HEAD_DOWN, HEAD_UP, REJECT_TABLE, STATUS_DATA_LEN,
-                          FrameParser, build_frame, build_temp_frame, parse_status,
-                          parse_temp)
+                          CMD_DOWN_SINGLE, CMD_UP_RAW, CMD_UP_STATUS, CMD_UP_TEMP,
+                          DR_TABLE, HEAD_DOWN, HEAD_UP, REJECT_TABLE,
+                          ST_FLAG_RAW_UPLINK, STATUS_DATA_LEN, FrameParser,
+                          build_frame, build_raw_frame, build_temp_frame,
+                          parse_raw, parse_status, parse_temp)
 
 
 class DemoSource(threading.Thread):
@@ -77,6 +79,12 @@ class DemoSource(threading.Thread):
         self._hot_channels = {3} if self.active_channels > 3 else set()
         self._crc_ok = 0
         self._crc_bad = 0
+        #: ★ 虚拟固件默认处于"原始上报"模式 (与真实固件 TC_UPLINK_MODE=1 一致):
+        #: 发 CMD=0x12 的 µV + 冷端 °C, 温度让上位机算。表加载失败时自动退化成
+        #: 发 CMD=0x10 温度帧, 保证没有 tables/ 也能演示。
+        self.raw_uplink = True
+        self._table = None
+        self._table_ready = False
 
     # ------------------------------------------------------------------
     # 与 SerialReader 对齐的接口
@@ -146,7 +154,7 @@ class DemoSource(threading.Thread):
         payload[15:17] = int(self.rounds * self.active_channels & 0xFFFF).to_bytes(2, "little")
         payload[17:19] = (0).to_bytes(2, "little")
         payload[19:21] = int(self.open_count & 0xFFFF).to_bytes(2, "little")
-        payload[21] = 0
+        payload[21] = ST_FLAG_RAW_UPLINK if self.raw_uplink else 0
         payload[22:24] = (0).to_bytes(2, "little")
         return parse_status(bytes(payload))
 
@@ -170,8 +178,51 @@ class DemoSource(threading.Thread):
                 values.append(base)
         return values
 
+    def _tc_table(self):
+        """懒加载 K 型分度表 (只为了把"演示温度"反算成热电势 µV)。失败返回 None。"""
+        if self._table_ready:
+            return self._table
+        self._table_ready = True
+        try:
+            try:
+                from .tc_table import TCTableSet, default_table_dir
+            except ImportError:                   # pragma: no cover
+                from tc_table import TCTableSet, default_table_dir
+            self._table = TCTableSet(default_table_dir()).get("K")
+        except Exception:                         # 表缺失/损坏 -> 退化成温度帧
+            self._table = None
+            self.raw_uplink = False
+        return self._table
+
+    def _to_raw(self, values) -> tuple:
+        """演示温度 (°C) -> (32 路热电势 µV, 每片冷端 °C)。
+
+        固件测到的是 E(T_hot) - E(T_cold), 这里照这个关系反算,
+        于是上位机算回来的温度应当等于 values (闭环验证)。
+        """
+        table = self._table
+        cj = [25.0 + 0.5 * i for i in range(CHIP_COUNT)]     # 每片冷端略有差异
+        emf = [float("nan")] * CHANNEL_COUNT
+        for ch in range(CHANNEL_COUNT):
+            v = values[ch]
+            if not math.isfinite(v):
+                continue                                  # 断线通道: 保持 NaN
+            cold = cj[ch // 2]
+            try:
+                e = float(table.temp_to_emf(v)[0]) - float(table.temp_to_emf(cold)[0])
+            except Exception:                             # pragma: no cover
+                continue
+            if math.isfinite(e):
+                emf[ch] = e
+        return emf, cj
+
     def _publish_temp(self, single_channel: Optional[int] = None) -> None:
-        """组真实字节帧 -> 走 FrameParser -> 投递解析结果 (与串口路径完全一致)。"""
+        """组真实字节帧 -> 走 FrameParser -> 投递解析结果 (与串口路径完全一致)。
+
+        ★ 演示模式默认也发**原始帧** (CMD=0x12): 先把"想展示的温度"用 K 型
+          分度表反算成 µV, 再让上位机自己算回温度。这样 DEMO 走的就是真实
+          链路 (固件只给 µV + 冷端), 而不是一条"只有演示才走"的捷径。
+        """
         values = self._sample_channels()
         if single_channel is not None:
             values = [v if i == single_channel else float("nan")
@@ -179,14 +230,25 @@ class DemoSource(threading.Thread):
         self.rounds += 1
 
         corrupt = self._random.random() < self.corrupt_rate
-        frame = build_temp_frame(values, use_crc=not corrupt)
+
+        if self._tc_table() is not None:
+            emf, cj = self._to_raw(values)
+            frame = build_raw_frame(emf, cj, use_crc=not corrupt)
+        else:
+            frame = build_temp_frame(values, use_crc=not corrupt)
+
         if corrupt:
             self._crc_bad += 1
         else:
             self._crc_ok += 1
+
         for cmd, payload in self._parser_up.feed(frame):
             if cmd == CMD_UP_TEMP:
                 self._emit(type="temp", t=time.time(), temps=parse_temp(payload),
+                           length=len(payload))
+            elif cmd == CMD_UP_RAW:
+                emf_uv, cj_c = parse_raw(payload)
+                self._emit(type="raw", t=time.time(), emf_uv=emf_uv, cj_c=cj_c,
                            length=len(payload))
         if self._parser_up.stats["crc_errors"]:
             self._emit(type="crc_error", count=self._parser_up.stats["crc_errors"])

@@ -52,22 +52,24 @@ matplotlib.rcParams["path.simplify_threshold"] = 0.6
 
 try:                                  # 允许 "python pc_ui/main.py" 直接跑
     from .protocol import (CHANNEL_COUNT, REJECT_TABLE, SAMPLE_RATE_CHOICES,
-                           baudrate_advice, cmd_run, cmd_set_rate_sps, cmd_single)
+                           ST_FLAG_RAW_UPLINK, baudrate_advice, cj_per_channel,
+                           cmd_run, cmd_set_rate_sps, cmd_single)
     from .recorder import DataRecorder
     from .serial_reader import SERIAL_AVAILABLE, SerialReader, available_ports
     from .logger import FileLogger
     from .simulator import DemoSource
-    from .tc_table import DEFAULT_TYPE, TCTableSet, default_table_dir
+    from .tc_table import DEFAULT_TYPE, MODE_PCHIP, TCTableSet, default_table_dir
     from .widgets import (ChannelGrid, ChannelSelector, RingBuffer, StatusLamp)
 except ImportError:                   # pragma: no cover
     from protocol import (CHANNEL_COUNT, REJECT_TABLE, SAMPLE_RATE_CHOICES,
-                          baudrate_advice, cmd_run, cmd_set_rate_sps, cmd_single)
+                          ST_FLAG_RAW_UPLINK, baudrate_advice, cj_per_channel,
+                          cmd_run, cmd_set_rate_sps, cmd_single)
     from recorder import DataRecorder
     from serial_reader import SERIAL_AVAILABLE, SerialReader, available_ports
     from logger import FileLogger
     from simulator import DemoSource
-    from tc_table import DEFAULT_TYPE, TCTableSet, default_table_dir
-    from widgets import ChannelGrid, ChannelSelector, RingBuffer, StatusLamp
+    from tc_table import DEFAULT_TYPE, MODE_PCHIP, TCTableSet, default_table_dir
+    from widgets import (ChannelGrid, ChannelSelector, RingBuffer, StatusLamp)
 
 APP_TITLE = "热电偶温度监测上位机  ·  STM32F103 + N×ADS1220"
 
@@ -134,6 +136,13 @@ class TemperatureApp:
         self.last_unknown_time = 0.0
         self._frame_times: "collections.deque[float]" = collections.deque(maxlen=400)
         self._single_pending = 0.0
+        # ★ CMD=0x12 原始帧相关: 温度由上位机查分度表算, 这里记录换算统计
+        self.raw_frames = 0                  # 收到的原始帧数
+        self.raw_mode = False                # 固件是否处于"原始上报"模式 (状态帧标志)
+        self._last_emf_uv = None             # 最近一帧的 32 路热电势 µV (给 CSV 用)
+        self._raw_mode_logged = False        # "固件是原始模式"只提示一次
+        self._raw_no_table_warned = False    # "表没加载"只提示一次
+        self._raw_conv_warned = False        # "换算失败"只提示一次
         self._plot_dirty = True
         self._values_dirty = True
         self._closing = False
@@ -731,6 +740,8 @@ class TemperatureApp:
         kind = msg.get("type")
         if kind == "temp":
             self._on_temp(msg)
+        elif kind == "raw":
+            self._on_raw(msg)
         elif kind == "status":
             self._on_status(msg)
         elif kind == "connected":
@@ -757,7 +768,49 @@ class TemperatureApp:
         elif kind == "info":
             self._log(msg.get("message", ""))
 
-    def _on_temp(self, msg: Dict) -> None:
+    def _on_raw(self, msg: Dict) -> None:
+        """★ CMD=0x12 原始帧: 用当前分度表把 µV 算成 °C, 再走温度帧同一条通路。
+
+        这就是"温度由上位机换算": 固件只给"实测热电势 µV + 冷端温度 °C",
+        这里用 tables/tc_type_<x>.csv + 单调三次插值(pchip) 算出热端温度。
+
+        好处: 换分度号 (K/J/T/E/N) / 换厂家标定表 只需要在界面上切一下,
+              完全不用重新编译下载固件; CSV 里同时存了 µV, 换表还能离线重算。
+        """
+        now = msg.get("t", time.time())
+        self.raw_frames += 1
+
+        table = self.tc_table
+        if table is None:
+            if not self._raw_no_table_warned:
+                self._raw_no_table_warned = True
+                self._log("收到原始帧 (CMD=0x12), 但分度表没加载成功, 无法换算温度。"
+                          "请检查 tables/ 目录 (可用 python tools/nist_tc_tables.py 生成)",
+                          "error")
+            return
+
+        try:
+            emf = np.asarray(msg.get("emf_uv", []), dtype=float)
+            if emf.size < CHANNEL_COUNT:
+                emf = np.concatenate([emf,
+                                      np.full(CHANNEL_COUNT - emf.size, np.nan)])
+            # 冷端是"每片一个", 先展开成"每通道一个"再补偿
+            cj = np.asarray(cj_per_channel(list(msg.get("cj_c", []))), dtype=float)
+            temps = np.asarray(table.compensate_hot_junction(emf, cj, MODE_PCHIP),
+                               dtype=float)
+        except Exception as exc:                     # 表坏了/数值异常都不该让 UI 崩
+            if not self._raw_conv_warned:
+                self._raw_conv_warned = True
+                self._log("原始帧温度换算失败 (%s型): %s"
+                          % (getattr(table, "tc_type", "?"), exc), "error")
+            return
+
+        # 超出分度表范围 / 断线 -> NaN; 其余保留
+        temps = np.where(np.isfinite(temps), temps, np.nan)
+        self._last_emf_uv = emf
+        self._on_temp({"t": now, "temps": temps.tolist()}, emf, msg.get("cj_c"))
+
+    def _on_temp(self, msg: Dict, emf_uv=None, cj_c=None) -> None:
         now = msg.get("t", time.time())
         values = np.asarray(msg.get("temps", []), dtype=float)
         if values.size < CHANNEL_COUNT:
@@ -781,7 +834,9 @@ class TemperatureApp:
         self.ring.push(now, values)
         self._plot_dirty = True
         if self.recorder.active:
-            self.recorder.submit(now, values)
+            # ★ 原始模式下把 µV 和冷端也一起存进 CSV:
+            #   有了这两个量, 以后换分度表就能**离线重算**历史数据。
+            self.recorder.submit(now, values, emf_uv, cj_c)
 
     def _on_status(self, msg: Dict) -> None:
         status = msg.get("status") or {}
@@ -790,6 +845,16 @@ class TemperatureApp:
         if "error" in status:
             self._log("状态帧解析失败: %s" % status["error"], "error")
             return
+
+        # ★ 固件处于"原始上报"模式吗? (发 CMD=0x12 的 µV+冷端, 温度由我们自己算)
+        #   只在状态变化时提示一次, 免得每 5 秒刷一条日志。
+        is_raw = bool(int(status.get("flags") or 0) & ST_FLAG_RAW_UPLINK)
+        if is_raw != self.raw_mode or not self._raw_mode_logged:
+            self.raw_mode = is_raw
+            self._raw_mode_logged = True
+            self._log("固件上报模式: %s" % (
+                "原始帧 CMD=0x12 (µV + 冷端 °C, 温度由上位机查分度表算)" if is_raw
+                else "温度帧 CMD=0x10 (固件已算好 °C)"))
 
         # ★ 跟随固件上报的本板片数: 8 路板就只显示 8 路, 不再把协议里
         #   那 24 个恒为 NaN 的槽位显示成"断线"。

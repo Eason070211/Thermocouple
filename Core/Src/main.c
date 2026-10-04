@@ -103,12 +103,25 @@ static uint8_t  s_errA[ADS1220_CHIP_COUNT];                     /**< 0 = SPI 成
 static uint8_t  s_errB[ADS1220_CHIP_COUNT];
 static uint8_t  s_errT[ADS1220_CHIP_COUNT];
 
-/** 本板实际通道的最终温度 (长度 = 片数 x 2) */
+#if (TC_UPLINK_MODE != 1)
+/** 本板实际通道的最终温度 (长度 = 片数 x 2)。
+ *  ★ 只在"固件算温度"模式 (0/2) 下需要 —— 默认模式 1 由上位机算, 这里不占空间。 */
 static float    s_temps[TC_CHANNEL_COUNT];
 
-/** 上报用的 32 槽缓冲区。协议固定 32 槽, 本板没接的槽位填 NaN。
+/** 上报用的 32 槽温度缓冲区 (CMD=0x10)。协议固定 32 槽, 本板没接的槽位填 NaN。
  *  (上位机靠状态帧里的片数知道哪几路是真实存在的) */
 static float    s_report[UART_TEMP_SLOT_COUNT];
+#endif
+
+#if (TC_UPLINK_MODE != 0)
+/** ★ 原始上报缓冲 (CMD=0x12): 32 槽热电势 µV + 16 槽冷端温度 °C。
+ *
+ *  这是"温度由上位机换算"的数据源: 固件只把 ADS1220 的 24bit 码值变成
+ *  µV 和冷端 °C, 其余(分度表/插值/单支标定)全部交给上位机 pc_ui/tc_table.py。
+ *  码值 -> µV 这一步是无损的 (见 board_config.h 的说明)。 */
+static float    s_report_uv[UART_TEMP_SLOT_COUNT];
+static float    s_report_cj[UART_CJ_SLOT_COUNT];
+#endif
 
 /*---- 状态 ----*/
 static App_State_t s_state;
@@ -260,8 +273,21 @@ static void App_ReadAll(int32_t *dst, uint8_t *err)
 }
 
 /*==============================================================================
- * 温度换算 (冷端补偿在这里完成)
+ * 温度换算 / 原始量打包 (冷端补偿在这里完成)
  *============================================================================*/
+/** 把本轮的 A/B 通道与冷端整理成上报数据, 并做断线判定。
+ *
+ *  ★ 这里是"温度由谁换算"的分岔点 (TC_UPLINK_MODE):
+ *      0 -> 固件用 NIST 多项式算 °C, 填 s_temps      (老行为)
+ *      1 -> 只填 s_report_uv / s_report_cj, 上位机查分度表算 °C  (默认)
+ *      2 -> 两边都填, 用于固件/上位机对比验证
+ *
+ *  三种模式下 s_chip_err_mask / s_open_cnt / s_drdy_missing_mask 的维护完全一致,
+ *  所以状态帧和断线计数在任何模式下都照常工作。
+ *
+ *  注意断线判定用的是 TC_IsOpen() 而不是 TC_Compute(): 前者只做
+ *  "冷端量程 + 满量程码值 + 物理窗口"三个判断, 不含任何多项式运算,
+ *  因此模式 1 下固件不需要算温度也能准确识别断线。 */
 static void App_ComputeTemps(void)
 {
   uint8_t chip;
@@ -269,9 +295,23 @@ static void App_ComputeTemps(void)
   uint8_t ib;
   float   cj_c;
   float   emf_uv;
-  TC_Result_t r;
 
   s_chip_err_mask = 0u;         /* 本轮错误位图从这里开始重新累积 */
+
+#if (TC_UPLINK_MODE != 0)
+  /* 原始上报缓冲先全置 NaN: 没接的通道 / 没贴的片保持 NaN, 上位机据此显示"无效" */
+  {
+    uint16_t k;
+    for (k = 0u; k < UART_TEMP_SLOT_COUNT; k++)
+    {
+      s_report_uv[k] = UART_NaN();
+    }
+    for (k = 0u; k < UART_CJ_SLOT_COUNT; k++)
+    {
+      s_report_cj[k] = UART_NaN();
+    }
+  }
+#endif
 
   for (chip = 0u; chip < ADS1220_CHIP_COUNT; chip++)
   {
@@ -279,8 +319,10 @@ static void App_ComputeTemps(void)
     ib = TC_CH_INDEX_B(chip);
 
     /* 默认本片两个通道都无效 */
+#if (TC_UPLINK_MODE != 1)
     s_temps[ia] = UART_NaN();
     s_temps[ib] = UART_NaN();
+#endif
 
     /* 跳过两类片:
      *   a) 上电回读校验没通过 (没焊/虚焊) —— 避免把"空总线读回的全 0"
@@ -301,18 +343,28 @@ static void App_ComputeTemps(void)
     }
     cj_c = ADS1220_TempCodeToCelsius(s_codeT[chip]);
 
+#if (TC_UPLINK_MODE != 0)
+    /* ★ 冷端原始量也要发给上位机: 冷端补偿 V+E(T_CJ) 必须由同一个算法完成,
+     *   只给 µV 不给冷端温度, 上位机是算不出热端温度的。 */
+    s_report_cj[chip] = cj_c;
+#endif
+
     /* ---- A 通道: AIN0/AIN1 ---- */
     if (s_errA[chip] == 0u)
     {
       emf_uv = ADS1220_CodeToMicroVolt(s_codeA[chip] - s_offset[chip], s_cfg.gain);
-      TC_Compute(emf_uv, cj_c, s_codeA[chip], &r);
-      if (r.valid != 0u)
+      if (TC_IsOpen(emf_uv, cj_c, s_codeA[chip]) != 0u)
       {
-        s_temps[ia] = r.hot_c;
+        s_open_cnt++;                 /* 断线/超量程: 该通道保持 NaN */
       }
       else
       {
-        s_open_cnt++;                 /* 断线/超量程 */
+#if (TC_UPLINK_MODE != 0)
+        s_report_uv[ia] = emf_uv;     /* 上位机算温度用的原始量 */
+#endif
+#if (TC_UPLINK_MODE != 1)
+        s_temps[ia] = TC_CompensateHotJunction(emf_uv, cj_c);
+#endif
       }
     }
     else
@@ -324,14 +376,18 @@ static void App_ComputeTemps(void)
     if (s_errB[chip] == 0u)
     {
       emf_uv = ADS1220_CodeToMicroVolt(s_codeB[chip] - s_offset[chip], s_cfg.gain);
-      TC_Compute(emf_uv, cj_c, s_codeB[chip], &r);
-      if (r.valid != 0u)
+      if (TC_IsOpen(emf_uv, cj_c, s_codeB[chip]) != 0u)
       {
-        s_temps[ib] = r.hot_c;
+        s_open_cnt++;
       }
       else
       {
-        s_open_cnt++;
+#if (TC_UPLINK_MODE != 0)
+        s_report_uv[ib] = emf_uv;
+#endif
+#if (TC_UPLINK_MODE != 1)
+        s_temps[ib] = TC_CompensateHotJunction(emf_uv, cj_c);
+#endif
       }
     }
     else
@@ -348,9 +404,14 @@ static void App_ReportTemps(void)
 {
   uint16_t i;
 
-  /* 1) 先把 32 个槽位全部填成 NaN。
-   *    ★ 协议固定 32 槽, 本板没接的通道就保持 NaN —— 上位机看到 NaN 就知道
-   *      "这一路不存在/断线", 而且 4 路板 / 8 路板 / 16 路板共用同一套上位机。 */
+  /*====================================================================
+   * 1) 温度帧 (CMD=0x10): 固件已经算好的 °C
+   *    只在 TC_UPLINK_MODE = 0 / 2 时发。
+   *==================================================================*/
+#if (TC_UPLINK_MODE != 1)
+  /* 先把 32 个槽位全部填成 NaN。
+   * ★ 协议固定 32 槽, 本板没接的通道就保持 NaN —— 上位机看到 NaN 就知道
+   *   "这一路不存在/断线", 而且 4 路板 / 8 路板 / 16 路板共用同一套上位机。 */
   for (i = 0u; i < UART_TEMP_SLOT_COUNT; i++)
   {
     s_report[i] = UART_NaN();
@@ -358,7 +419,7 @@ static void App_ReportTemps(void)
 
   if ((s_single_mode != 0u) && (s_single_ch != UART_CH_SINGLE_ALL))
   {
-    /* 2a) 单通道请求: 32 槽里只放目标通道那一个值, 其余保持 NaN */
+    /* 单通道请求: 32 槽里只放目标通道那一个值, 其余保持 NaN */
     if (s_single_ch < UART_TEMP_SLOT_COUNT)
     {
       s_report[s_single_ch] = (s_single_ch < TC_CHANNEL_COUNT)
@@ -368,7 +429,7 @@ static void App_ReportTemps(void)
   }
   else
   {
-    /* 2b) 正常上报: 把本板实际通道拷进前 TC_CHANNEL_COUNT 个槽位 */
+    /* 正常上报: 把本板实际通道拷进前 TC_CHANNEL_COUNT 个槽位 */
     for (i = 0u; i < TC_CHANNEL_COUNT; i++)
     {
       s_report[i] = s_temps[i];
@@ -376,6 +437,30 @@ static void App_ReportTemps(void)
   }
 
   (void)UART_Protocol_SendTempFrame(s_report);
+#endif
+
+  /*====================================================================
+   * 2) ★原始帧 (CMD=0x12): 热电势 µV + 冷端 °C, 温度由上位机查分度表算。
+   *    只在 TC_UPLINK_MODE = 1 / 2 时发。
+   *
+   *    单次读取时同样只保留目标通道 (与温度帧同一约定), 其余置 NaN。
+   *    这里就地改 s_report_uv 是安全的: 它每轮都会被 App_ComputeTemps()
+   *    重新填满, 不会把上一轮的掩码带到下一轮。
+   *==================================================================*/
+#if (TC_UPLINK_MODE != 0)
+  if ((s_single_mode != 0u) && (s_single_ch != UART_CH_SINGLE_ALL))
+  {
+    for (i = 0u; i < UART_TEMP_SLOT_COUNT; i++)
+    {
+      if (i != (uint16_t)s_single_ch)
+      {
+        s_report_uv[i] = UART_NaN();
+      }
+    }
+  }
+
+  (void)UART_Protocol_SendRawFrame(s_report_uv, s_report_cj);
+#endif
 }
 
 static void App_StatusFill(UART_Status_t *st)
@@ -396,6 +481,11 @@ static void App_StatusFill(UART_Status_t *st)
   st->phase_timeout_count = s_phase_timeout_cnt;
 
   st->flags = s_flags;
+#if (TC_UPLINK_MODE != 0)
+  /* ★ 告诉上位机"我发的是原始帧(0x12), 温度请你算":
+   *   上位机据此选用查表换算而不是直接画 0x10 的温度。 */
+  st->flags |= UART_ST_FLAG_RAW_UPLINK;
+#endif
   if (UART_Protocol_GetTxOverflowCount() != 0u)
   {
     st->flags |= UART_ST_FLAG_TX_OVERFLOW;

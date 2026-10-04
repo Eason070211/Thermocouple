@@ -28,6 +28,12 @@
   *
   *    0x11 状态上报:  DATA = 24 字节, 见下方 UART_STATUS_DATA_LEN 布局
   *
+  *    0x12 ★原始上报: DATA = 192 字节 = 32 x float32 热电势 (µV)
+  *                                     + 16 x float32 冷端温度 (°C)。
+  *                    固件只做"码值 -> µV / 冷端 °C", 温度由上位机查分度表
+  *                    换算 (见 TC_UPLINK_MODE 与 docs/TC_TABLE_FORMAT.md)。
+  *                    无效通道填 NaN (0x7FC00000), 与 0x10 同一约定。
+  *
   *  ---------------------------- 下行 CMD ----------------------------
   *    0x01 设置采样率:
   *           LEN = 2: DATA[0] = DR   (索引 0..6, 也接受已移位的 0x00/0x20/.../0xC0)
@@ -65,6 +71,7 @@ extern "C" {
 
 #define UART_CMD_UP_TEMP       0x10u   /**< 上行: 温度帧 (固定 32 槽, 本板用前 8 槽) */
 #define UART_CMD_UP_STATUS     0x11u   /**< 上行: 状态 */
+#define UART_CMD_UP_RAW        0x12u   /**< 上行: 原始帧 (热电势 µV + 冷端 °C, 温度由上位机算) */
 
 #define UART_CMD_DOWN_SET_RATE 0x01u   /**< 下行: 设置采样率 */
 #define UART_CMD_DOWN_RUN      0x02u   /**< 下行: 启动/停止采集 */
@@ -82,6 +89,29 @@ extern "C" {
 /** 温度帧 DATA 长度 = 32 x float32 = 128 字节 (固定) */
 #define UART_TEMP_DATA_LEN     (UART_TEMP_SLOT_COUNT * 4u)
 #define UART_STATUS_DATA_LEN   24u
+
+/** ★ 原始数据帧 (CMD=0x12) —— 让上位机用自己的分度表算温度。
+ *
+ *  DATA 布局 (共 192 字节, <= UART_DATA_MAX_LEN 200):
+ *      [0   .. 127]  32 x float32 热电势 (µV, 已减失调), 无效 = NaN
+ *      [128 .. 191]  16 x float32 冷端温度 (°C, ADS1220 内部温度传感器), 无芯片 = NaN
+ *
+ *  为什么冷端也发: 冷端补偿 V_total = V_TC + E(T_CJ) 必须由**同一个**算法完成,
+ *  所以上位机要么两样都自己算, 要么两样都用固件的 —— 只给半个是做不出来的。
+ *
+ *  冷端槽位固定 16 (= ADS1220_MAX_CHIP, 一片一个冷端), 本板 4 片用前 4 个;
+ *  与温度帧一样"协议固定、与板子规模无关", 4 路/8 路/16 路板共用同一套上位机。
+ *
+ *  无效值约定与温度帧完全一致: quiet NaN (0x7FC00000)。 */
+#define UART_CJ_SLOT_COUNT     16u
+#define UART_RAW_EMF_LEN       UART_TEMP_DATA_LEN                    /**< 128 = 32 x f32 (µV) */
+#define UART_RAW_CJ_LEN        (UART_CJ_SLOT_COUNT * 4u)             /**<  64 = 16 x f32 (°C) */
+#define UART_RAW_CJ_OFFSET     UART_RAW_EMF_LEN                      /**< 冷端段在 DATA 内的偏移 */
+#define UART_RAW_DATA_LEN      (UART_RAW_EMF_LEN + UART_RAW_CJ_LEN)  /**< 192 */
+
+#if (UART_RAW_DATA_LEN > UART_DATA_MAX_LEN)
+  #error "原始数据帧超过 UART_DATA_MAX_LEN, 请减小 UART_CJ_SLOT_COUNT"
+#endif
 
 #define UART_CH_SINGLE_ALL     0xFFu   /**< CMD=0x03 时表示"全部通道" */
 
@@ -125,6 +155,9 @@ extern "C" {
 #define UART_ST_FLAG_TX_OVERFLOW 0x08u /**< 串口发送缓冲溢出(丢过帧) */
 #define UART_ST_FLAG_CRC_ERR     0x10u /**< 收到过 CRC 错的下行帧 */
 #define UART_ST_FLAG_DRDY_PARTIAL 0x20u /**< ★新增: 有片一直不就绪(看 chip_err 位图定位) */
+#define UART_ST_FLAG_RAW_UPLINK  0x40u  /**< ★固件上报的是原始帧(CMD=0x12, µV+冷端°C),
+                                            温度需要上位机查分度表算。老上位机看到这一位
+                                            就该提示"固件是原始模式, 请升级上位机"。 */
 
 /*==============================================================================
  * 事件
@@ -196,6 +229,17 @@ uint8_t UART_Protocol_SendTempFrame(const float temps[UART_TEMP_SLOT_COUNT]);
 
 /** 上报状态 (CMD=0x11)。 */
 uint8_t UART_Protocol_SendStatusFrame(const UART_Status_t *st);
+
+/** ★ 上报原始数据帧 (CMD=0x12): 32 路热电势 µV + 16 路冷端温度 °C。
+ *
+ *  这一帧的存在就是为了"温度由上位机换算": 固件只负责把 ADS1220 的码值
+ *  变成 µV 和冷端 °C, 剩下的 NIST 分度表/插值/单支标定都由上位机做。
+ *
+ *  @param emf_uv  32 槽热电势 (µV), 无效通道传 NaN
+ *  @param cj_c    16 槽冷端温度 (°C), 没贴的芯片传 NaN
+ *  @retval 1 = 已入队; 0 = 参数错或发送缓冲满(该帧被丢弃) */
+uint8_t UART_Protocol_SendRawFrame(const float emf_uv[UART_TEMP_SLOT_COUNT],
+                                   const float cj_c[UART_CJ_SLOT_COUNT]);
 
 /** 组一个 float32 小端到 buf (供上位机参考实现对齐) */
 void UART_PutFloatLE(uint8_t *buf, float v);

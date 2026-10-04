@@ -310,6 +310,35 @@ uint8_t UART_Protocol_SendStatusFrame(const UART_Status_t *st)
   return UART_Protocol_SendFrame(UART_CMD_UP_STATUS, d, UART_STATUS_DATA_LEN);
 }
 
+uint8_t UART_Protocol_SendRawFrame(const float emf_uv[UART_TEMP_SLOT_COUNT],
+                                   const float cj_c[UART_CJ_SLOT_COUNT])
+{
+  /* static: 192 字节, 同样不放栈上 (启动文件默认只有 1KB 栈)。
+     和温度帧用不同的缓冲区, 所以 TC_UPLINK_MODE=2(两帧都发) 时不会互相踩。 */
+  static uint8_t buf[UART_RAW_DATA_LEN];
+  uint16_t i;
+
+  if ((emf_uv == NULL) || (cj_c == NULL))
+  {
+    return 0u;
+  }
+
+  /* 前半段: 32 槽热电势 (µV)。上位机拿它 + 自己的分度表算温度。 */
+  for (i = 0u; i < UART_TEMP_SLOT_COUNT; i++)
+  {
+    UART_PutFloatLE(&buf[i * 4u], emf_uv[i]);
+  }
+
+  /* 后半段: 16 槽冷端温度 (°C)。冷端补偿必须用同一个算法,
+     所以这两段必须一起发, 只给一半上位机算不出温度。 */
+  for (i = 0u; i < UART_CJ_SLOT_COUNT; i++)
+  {
+    UART_PutFloatLE(&buf[UART_RAW_CJ_OFFSET + (i * 4u)], cj_c[i]);
+  }
+
+  return UART_Protocol_SendFrame(UART_CMD_UP_RAW, buf, (uint8_t)UART_RAW_DATA_LEN);
+}
+
 /*==============================================================================
  * 事件队列
  *============================================================================*/

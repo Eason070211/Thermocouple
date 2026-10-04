@@ -24,6 +24,12 @@ STM32 -> 上位机 (上行上报):
   0x10 温度: DATA = 32 x float32 小端 (°C), 顺序 ch[2n]=第 n 片 AIN0/AIN1,
              ch[2n+1]=第 n 片 AIN2/AIN3。无效通道 = quiet NaN (断线/通信失败)。
   0x11 状态: DATA = 24 字节, 见 parse_status()
+  0x12 ★原始: DATA = 192 字节 = 32 x float32 热电势 (µV)
+                            + 16 x float32 冷端温度 (°C)。
+             固件只做"码值 -> µV / 冷端 °C", 温度由上位机查分度表算
+             (见 pc_ui/tc_table.py 与 docs/TC_TABLE_FORMAT.md)。
+             固件默认发这一帧 (TC_UPLINK_MODE=1), 状态帧的 flags 里
+             ST_FLAG_RAW_UPLINK 会置位。
 
 下行 CMD:
   0x01 设置采样率: LEN=2 -> DATA = [DR索引(0..6), 抑制索引(0..3)]
@@ -50,6 +56,7 @@ HEAD_UP = 0x55                        # MCU -> PC 帧头
 
 CMD_UP_TEMP = 0x10                    # 上行: 温度帧 (固定 32 槽, 本板用前 8 槽)
 CMD_UP_STATUS = 0x11                  # 上行: 状态
+CMD_UP_RAW = 0x12                     # 上行: 原始帧 (热电势 µV + 冷端 °C, 温度由上位机算)
 CMD_DOWN_SET_RATE = 0x01              # 下行: 设置采样率
 CMD_DOWN_RUN = 0x02                   # 下行: 启动/停止采集
 CMD_DOWN_SINGLE = 0x03                # 下行: 读取单次温度
@@ -60,6 +67,14 @@ STATUS_DATA_LEN = 24                  # 状态帧 DATA 长度
 TEMP_DATA_LEN = CHANNEL_COUNT * 4     # 温度帧 DATA 长度 = 128
 MAX_DATA_LEN = 200                    # 固件限制的 DATA 上限
 CH_SINGLE_ALL = 0xFF                  # CMD=0x03 时表示"全部通道"
+
+#: ★ 原始帧 (CMD=0x12) 布局 —— 必须与 Core/Inc/uart_protocol.h 一致
+#:   [0 .. 127]  32 x float32 热电势 (µV, 已减失调), 无效 = NaN
+#:   [128..191]  16 x float32 冷端温度 (°C), 无芯片 = NaN
+CJ_SLOT_COUNT = 16                    # 协议冷端槽位数 (一片一个, 与 ADS1220_MAX_CHIP 一致)
+RAW_EMF_LEN = TEMP_DATA_LEN           # 128
+RAW_CJ_OFFSET = RAW_EMF_LEN           # 128
+RAW_DATA_LEN = RAW_EMF_LEN + CJ_SLOT_COUNT * 4   # 192
 
 #: 帧内字节间超时 (秒)。超过则认为半截帧作废, 重新找帧头 (与固件 50ms 一致)
 FRAME_GAP_S = 0.050
@@ -79,6 +94,7 @@ ST_FLAG_VERIFY_FAIL = 0x04            # 上电回读校验失败
 ST_FLAG_TX_OVERFLOW = 0x08            # 串口发送缓冲溢出
 ST_FLAG_CRC_ERR = 0x10                # 收到过 CRC 错的下行帧
 ST_FLAG_DRDY_PARTIAL = 0x20           # 有片一直不就绪 (看 chip_err 位图定位)
+ST_FLAG_RAW_UPLINK = 0x40             # ★固件上报的是原始帧 (0x12), 温度要上位机自己算
 
 ST_FLAG_TEXT = (
     (ST_FLAG_SELFTEST, "自检失败"),
@@ -87,6 +103,7 @@ ST_FLAG_TEXT = (
     (ST_FLAG_TX_OVERFLOW, "发送缓冲溢出"),
     (ST_FLAG_CRC_ERR, "收到CRC错帧"),
     (ST_FLAG_DRDY_PARTIAL, "有片无DRDY"),
+    (ST_FLAG_RAW_UPLINK, "原始模式(上位机算温度)"),
 )
 
 #: 温度帧的**固定**槽位数 —— 与板子实际通道数无关。
@@ -175,6 +192,22 @@ def build_temp_frame(temps: List[float], head: int = HEAD_UP,
 def build_status_frame(payload: bytes, head: int = HEAD_UP) -> bytes:
     """按 CMD=0x11 组一帧状态。"""
     return build_frame(CMD_UP_STATUS, payload, head=head)
+
+
+def build_raw_frame(emf_uv: List[float], cj_c: List[float],
+                    head: int = HEAD_UP, use_crc: bool = True) -> bytes:
+    """按 CMD=0x12 组一帧原始数据 (供模拟器/测试使用)。
+
+    :param emf_uv: 32 路热电势 (µV), 不足补 nan
+    :param cj_c:   16 路冷端温度 (°C), 不足补 nan
+    """
+    e = list(emf_uv)[:CHANNEL_COUNT]
+    e.extend([float("nan")] * (CHANNEL_COUNT - len(e)))
+    c = list(cj_c)[:CJ_SLOT_COUNT]
+    c.extend([float("nan")] * (CJ_SLOT_COUNT - len(c)))
+    payload = (struct.pack("<%df" % CHANNEL_COUNT, *e)
+               + struct.pack("<%df" % CJ_SLOT_COUNT, *c))
+    return build_frame(CMD_UP_RAW, payload, head=head, use_crc=use_crc)
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +326,41 @@ def parse_temp(payload: bytes) -> List[float]:
     return [v if math.isfinite(v) else float("nan") for v in values]
 
 
+def parse_raw(payload: bytes) -> Tuple[List[float], List[float]]:
+    """CMD=0x12 -> (32 路热电势 µV, 16 路冷端温度 °C); 无效通道为 nan。
+
+    这一帧是"温度由上位机换算"的数据源: 固件只把 ADS1220 的码值变成
+    µV 和冷端 °C, 剩下的分度表/插值/单支标定交给 pc_ui.tc_table::
+
+        emf_uv, cj_c = parse_raw(payload)
+        temps = table.compensate_hot_junction(emf_uv, cj_c_per_chip)
+
+    容错与 parse_temp 一致: 长度不足时补 nan, inf/-inf 也归一成 nan。
+    """
+    def _slice(offset: int, count: int) -> List[float]:
+        avail = max(0, min(len(payload) - offset, count * 4))
+        n = avail // 4
+        vals = list(struct.unpack("<%df" % n, payload[offset:offset + n * 4])) if n else []
+        if len(vals) < count:
+            vals.extend([float("nan")] * (count - len(vals)))
+        return [v if math.isfinite(v) else float("nan") for v in vals]
+
+    return _slice(0, CHANNEL_COUNT), _slice(RAW_CJ_OFFSET, CJ_SLOT_COUNT)
+
+
+def cj_per_channel(cj_c: List[float]) -> List[float]:
+    """把"每片一个冷端温度"展开成"每通道一个"。
+
+    通道顺序与温度帧一致: ch[2n] / ch[2n+1] 都属于第 n 片, 共用同一个冷端。
+    """
+    out = [float("nan")] * CHANNEL_COUNT
+    for ch in range(CHANNEL_COUNT):
+        chip = ch // 2
+        if chip < len(cj_c):
+            out[ch] = cj_c[chip]
+    return out
+
+
 def parse_status(payload: bytes) -> Dict:
     """CMD=0x11 -> dict (字段含义见 Core/Inc/uart_protocol.h)。"""
     if len(payload) < STATUS_DATA_LEN:
@@ -393,10 +461,12 @@ def cmd_single(channel: int = CH_SINGLE_ALL) -> bytes:
 def baudrate_advice(sps: int) -> Optional[str]:
     """返回一条警告文本 (无问题时返回 None)。
 
-    一帧温度 = 133 字节; 115200bps 下一帧约 11.5ms, 若帧率高于此值会积压丢帧。
+    一帧温度 = 133 字节, 一帧原始数据 = 197 字节 (192+5);
+    115200bps 下分别约 11.5ms / 17.1ms, 若帧率高于此值会积压丢帧。
     """
     if sps >= 175:
-        return "采样率 %d SPS 建议使用 460800 波特率 (115200 下 133 字节/帧约 11.5ms)" % sps
+        return ("采样率 %d SPS 建议使用 460800 波特率 "
+                "(115200 下 133 字节/帧约 11.5ms, 197 字节原始帧约 17.1ms)" % sps)
     return None
 
 
@@ -447,6 +517,32 @@ def selftest(verbose: bool = True) -> bool:
         check("长度补齐到 32", len(back) == CHANNEL_COUNT)
         check("通道 7 是 NaN", math.isnan(back[7]))
         check("通道 6 数值正确", abs(back[6] - 9.0) < 1e-6)
+
+    if verbose:
+        print("3b) 上行原始帧闭环 (CMD=0x12: uV + 冷端 °C)")
+    emf = [i * 100.0 for i in range(CHANNEL_COUNT)]
+    emf[5] = float("nan")                     # 无效通道
+    cj = [25.0] * CJ_SLOT_COUNT
+    cj[2] = float("nan")                      # 第 2 片没贴
+    rframe = build_raw_frame(emf, cj)
+    check("帧长 = 3 + 192 + 2 = 197", len(rframe) == 197)
+    check("LEN 字段 = 192", rframe[2] == RAW_DATA_LEN == 192)
+    got = list(FrameParser(HEAD_UP).feed(rframe))
+    check("解析出 1 帧 CMD=0x12", len(got) == 1 and got[0][0] == CMD_UP_RAW)
+    if got:
+        back_emf, back_cj = parse_raw(got[0][1])
+        check("热电势补齐到 32", len(back_emf) == CHANNEL_COUNT)
+        check("冷端补齐到 16", len(back_cj) == CJ_SLOT_COUNT)
+        check("通道 5 热电势是 NaN", math.isnan(back_emf[5]))
+        check("通道 4 热电势正确 (400µV)", abs(back_emf[4] - 400.0) < 1e-3)
+        check("冷端 ch2 是 NaN", math.isnan(back_cj[2]))
+        check("冷端 ch1 == 25°C", abs(back_cj[1] - 25.0) < 1e-6)
+        # 冷端按片展开到通道: ch0/ch1 用第 0 片, ch4/ch5 用第 2 片(没贴 -> NaN)
+        per_ch = cj_per_channel(back_cj)
+        check("展开后 ch1 冷端 = 25°C", abs(per_ch[1] - 25.0) < 1e-6)
+        check("展开后 ch5 冷端是 NaN (第2片没贴)", math.isnan(per_ch[5]))
+    check("短包不崩且补 NaN",
+          len(parse_raw(b"\x00\x00")[0]) == CHANNEL_COUNT)
 
     if verbose:
         print("4) 抗干扰能力")

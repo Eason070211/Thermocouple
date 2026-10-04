@@ -28,18 +28,20 @@ import numpy as np
 import pandas as pd
 
 try:                                  # 包内导入
-    from .protocol import (CHANNEL_COUNT, CMD_DOWN_SET_RATE, STATUS_DATA_LEN,
-                           build_frame, build_temp_frame, cmd_set_rate_sps,
-                           crc16_modbus, selftest as protocol_selftest)
+    from .protocol import (CHANNEL_COUNT, CJ_SLOT_COUNT, CMD_DOWN_SET_RATE,
+                           STATUS_DATA_LEN, build_frame, build_temp_frame,
+                           cmd_set_rate_sps, crc16_modbus,
+                           selftest as protocol_selftest)
     from .recorder import STATUS_COLUMNS, TEMP_COLUMNS, DataRecorder
     from .serial_reader import SerialReader
     from .simulator import DemoSource
     from .widgets import STATE_NORMAL, STATE_OPEN, STATE_OVER, ChannelGrid, RingBuffer
 except ImportError:                   # 直接跑脚本
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from protocol import (CHANNEL_COUNT, CMD_DOWN_SET_RATE, STATUS_DATA_LEN,
-                          build_frame, build_temp_frame, cmd_set_rate_sps,
-                          crc16_modbus, selftest as protocol_selftest)
+    from protocol import (CHANNEL_COUNT, CJ_SLOT_COUNT, CMD_DOWN_SET_RATE,
+                          STATUS_DATA_LEN, build_frame, build_temp_frame,
+                          cmd_set_rate_sps, crc16_modbus,
+                          selftest as protocol_selftest)
     from recorder import STATUS_COLUMNS, TEMP_COLUMNS, DataRecorder
     from serial_reader import SerialReader
     from simulator import DemoSource
@@ -179,27 +181,75 @@ def test_demo_source() -> None:
     src.send_command(0x02, bytes((1,)))                 # 启动采集
 
     deadline = time.time() + 5.0
-    temp_msgs, status_msgs, crc_msgs = [], [], []
+    temp_msgs, raw_msgs, status_msgs, crc_msgs = [], [], [], []
     # 坏帧是随机注入的, 所以一直收, 直到三样都出现或超时
-    while time.time() < deadline and not (len(temp_msgs) >= 5 and status_msgs and crc_msgs):
+    # ★ DEMO 默认按固件默认行为发原始帧 (CMD=0x12), 所以这里两种都收:
+    #   只要"数据帧"到齐即可, 具体是 0x10 还是 0x12 由 tables/ 是否可加载决定。
+    while time.time() < deadline and not (len(temp_msgs) + len(raw_msgs) >= 5
+                                          and status_msgs and crc_msgs):
         try:
             msg = out.get_nowait()
         except queue.Empty:
             time.sleep(0.01)
             continue
-        temp_msgs.append(msg) if msg["type"] == "temp" else None
-        status_msgs.append(msg) if msg["type"] == "status" else None
-        crc_msgs.append(msg) if msg["type"] == "crc_error" else None
+        if msg["type"] == "temp":
+            temp_msgs.append(msg)
+        elif msg["type"] == "raw":
+            raw_msgs.append(msg)
+        elif msg["type"] == "status":
+            status_msgs.append(msg)
+        elif msg["type"] == "crc_error":
+            crc_msgs.append(msg)
     src.stop()
 
-    check("收到 >=5 帧温度", len(temp_msgs) >= 5, str(len(temp_msgs)))
+    n_data = len(temp_msgs) + len(raw_msgs)
+    check("收到 >=5 帧数据 (温度帧或原始帧)", n_data >= 5,
+          "temp=%d raw=%d" % (len(temp_msgs), len(raw_msgs)))
     check("温度帧长 32 路", all(len(m["temps"]) == CHANNEL_COUNT for m in temp_msgs))
+    check("原始帧热电势 32 路 / 冷端 16 路",
+          all(len(m["emf_uv"]) == CHANNEL_COUNT and len(m["cj_c"]) == CJ_SLOT_COUNT
+              for m in raw_msgs))
+    check("原始帧能被分度表换算成温度",
+          _raw_frames_convertible(raw_msgs))
     check("收到状态帧", bool(status_msgs))
     if status_msgs:
         check("采样率设置生效 (90 SPS)",
               status_msgs[-1]["status"]["dr_sps"] == 90,
               str(status_msgs[-1]["status"].get("dr_sps")))
     check("坏帧被 CRC 拦截并计数", bool(crc_msgs))
+
+
+def _raw_frames_convertible(raw_msgs) -> bool:
+    """原始帧 -> 分度表 -> 温度: 至少能算出一个有限值。
+
+    这一条把"固件发 µV、上位机算温度"这条**新链路**真正测到,
+    而不是只测字节长度。tables/ 缺失时跳过 (返回 True), 不误报失败。
+    """
+    if not raw_msgs:
+        return True                      # 走的是温度帧分支, 不适用
+    try:
+        try:
+            from .tc_table import TCTableSet, default_table_dir
+        except ImportError:              # pragma: no cover
+            from tc_table import TCTableSet, default_table_dir
+        table = TCTableSet(default_table_dir()).get("K")
+    except Exception:
+        return True                      # 没有表就不判
+    try:
+        import numpy as np
+        try:
+            from .protocol import cj_per_channel
+        except ImportError:              # pragma: no cover
+            from protocol import cj_per_channel
+        for m in raw_msgs:
+            t = table.compensate_hot_junction(np.asarray(m["emf_uv"], dtype=float),
+                                              np.asarray(cj_per_channel(m["cj_c"]),
+                                                         dtype=float))
+            if np.any(np.isfinite(t)):
+                return True
+        return False
+    except Exception:
+        return False
 
 
 def test_state_classification() -> None:

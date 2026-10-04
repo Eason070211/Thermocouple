@@ -51,13 +51,17 @@ extern "C" {
 #define TC_CJ_MIN_C           (-40.0f)
 #define TC_CJ_MAX_C           (125.0f)
 
-/** 断线(开路)判定门限 —— 实测 V_TC 落在 K 型物理量程之外就认为开路。
- *  合法范围: V_TC = E(T_TC) - E(T_CJ),  T_TC∈[-200,1372], T_CJ∈[-40,85]
- *            => 约 [-9400, +56413] µV
- *  这里再放宽一些, 避免边缘误报; 而断线时被 10uA 烧断电流源/偏置电阻拉出的
- *  读数通常是 ±满量程(±2048000 µV), 离门限很远。 */
-#define TC_K_EMF_OPEN_HI_UV   (60000.0f)
-#define TC_K_EMF_OPEN_LO_UV   (-12000.0f)
+/** 断线(开路)判定的热电势窗口 —— 见 board_config.h 的 TC_OPEN_EMF_*。
+ *
+ *  这里的物理依据: 合法范围 V_TC = E(T_TC) - E(T_CJ)。
+ *    K 型 : T_TC∈[-200,1372], T_CJ∈[-40,125] => 约 [-9400, +56413] µV
+ *    最宽的是 E 型 (1000°C 约 76373 µV), 所以默认窗口取 ±80mV, 见 board_config.h。
+ *
+ *  ★ 这一条是**分度号相关**的辅助判据; 主判据是"码值被 BCS/偏置电阻拉死到
+ *    ±满量程"(与分度号无关, 见 TC_ADC_CODE_*)。所以 TC_OPEN_EMF_CHECK=0
+ *    关掉它也不会漏判断线, 只是少了一层"高阻未满量程"的兜底。 */
+#define TC_K_EMF_OPEN_HI_UV   (TC_OPEN_EMF_HI_UV)
+#define TC_K_EMF_OPEN_LO_UV   (TC_OPEN_EMF_LO_UV)
 
 /** ADS1220 24bit 满量程码值 (用于识别"输入被拉死") */
 #define TC_ADC_CODE_POS_FS    (0x7FFFFFL)
@@ -90,6 +94,22 @@ float TC_K_TempFromEmf(float emf_uv);
 
 /** 冷端补偿: 由"实测热电势 + 冷端温度"算出热端温度 °C。 */
 float TC_CompensateHotJunction(float emf_tc_uv, float cj_c);
+
+/** ★ 只做断线/超量程判定, **不**换算温度。
+ *
+ *  给 TC_UPLINK_MODE=1 (温度由上位机算) 用: 固件仍然需要在本地判开路,
+ *  因为状态帧要报 open_tc_count, 而且断线通道不该把 µV 发成"看起来正常"的值。
+ *
+ *  判定依据与 TC_Compute() 逐条一致, 但不含任何多项式运算:
+ *    1) 冷端温度超出 ADS1220 内部温度传感器范围 -> 本片两路都无法计算;
+ *    2) 码值被 BCS/偏置电阻拉死到 ±满量程 (断线最典型的表现);
+ *    3) 热电势超出物理窗口 (TC_OPEN_EMF_*, 可用宏关掉)。
+ *
+ *  @param emf_tc_uv  已做失调补偿的差分电压 (µV)
+ *  @param cj_c       冷端温度 (°C)
+ *  @param raw_code   24bit 原始码值 (识别满量程); 没有就传 0
+ *  @retval 1 = 开路/超量程 (该通道无效, 上位机应显示 NaN); 0 = 正常 */
+uint8_t TC_IsOpen(float emf_tc_uv, float cj_c, int32_t raw_code);
 
 /** 一次算完: 断线判定 + 冷端补偿 + 量程裁剪。
  *  @param emf_tc_uv  已做失调补偿的差分电压 (µV)
