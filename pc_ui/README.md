@@ -62,11 +62,30 @@ python -m pc_ui --demo
 | `--demo` | 演示模式：用 `DemoSource` 虚拟下位机产生数据 |
 | `--samples N` | 曲线保留点数，默认 1000 |
 | `--channels N` | 强制本板通道数（4/8/16/32）；默认 0 = 自动跟随固件上报的片数 |
+| `--tc-type X` | 分度号，默认 **K**；需 `tables/tc_type_<x>.csv` 已存在 |
 | `--data-dir DIR` | CSV 默认目录，默认 `./data` |
 | `--over-temp T` | 超温门限 °C，默认 1000 |
 | `--no-auto-connect` | 启动后不自动连接 |
 | `--list-ports` | 列出串口后退出 |
 | `--selftest` | 运行协议自检后退出 |
+
+### 分度表 (TC_TABLE v1)
+
+工程 `tables/` 目录下自带 **K / J / T / E / N** 五种分度表，由 NIST SRD 60 官方
+纯文本数据自动生成并逐点校验，**默认使用 K 型**。
+
+| 命令 | 作用 |
+| --- | --- |
+| `python tools/nist_tc_tables.py` | 重新下载/生成/校验全部表（带本地缓存，可 `--offline`）|
+| `python pc_ui/table_selftest.py` | 表与引擎自检（44 项：往返、亚格点精度、scipy 交叉验证、单位/篡改防护）|
+| `python -m pc_ui.tc_table J` | 命令行试算某张表 |
+
+表文件的字段、校验规则、以及"怎么把厂家 PDF 变成这个格式"的流程，
+见 **[docs/TC_TABLE_FORMAT.md](../docs/TC_TABLE_FORMAT.md)**。
+
+> ⚠️ 单位是强制字段：NIST 原文件的逆函数系数是 **mV** 基准，而固件是 **µV** 基准，
+> 两者差 `1000^(i-1)`。抄错不会报错，只会让温度差几个数量级 —— 所以加载器
+> 强制校验 `emf_unit`，并且用 `sha256` 防止表被手改。
 
 ---
 

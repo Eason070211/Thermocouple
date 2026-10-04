@@ -57,6 +57,7 @@ try:                                  # 允许 "python pc_ui/main.py" 直接跑
     from .serial_reader import SERIAL_AVAILABLE, SerialReader, available_ports
     from .logger import FileLogger
     from .simulator import DemoSource
+    from .tc_table import DEFAULT_TYPE, TCTableSet, default_table_dir
     from .widgets import (ChannelGrid, ChannelSelector, RingBuffer, StatusLamp)
 except ImportError:                   # pragma: no cover
     from protocol import (CHANNEL_COUNT, REJECT_TABLE, SAMPLE_RATE_CHOICES,
@@ -65,6 +66,7 @@ except ImportError:                   # pragma: no cover
     from serial_reader import SERIAL_AVAILABLE, SerialReader, available_ports
     from logger import FileLogger
     from simulator import DemoSource
+    from tc_table import DEFAULT_TYPE, TCTableSet, default_table_dir
     from widgets import ChannelGrid, ChannelSelector, RingBuffer, StatusLamp
 
 APP_TITLE = "热电偶温度监测上位机  ·  STM32F103 + N×ADS1220"
@@ -88,10 +90,12 @@ class TemperatureApp:
                  record_dir: str = "./data",
                  over_temp: float = 1000.0,
                  auto_connect: bool = True,
-                 channels: int = 0):
+                 channels: int = 0,
+                 tc_type: str = DEFAULT_TYPE):
         """
         :param channels: 强制指定本板通道数 (4/8/16/32); 0 = 自动,
                          由固件状态帧上报的片数决定 (推荐)。
+        :param tc_type:  分度号 (默认 K)。必须是工程 tables/ 目录下已有表的类型。
         """
         self.demo = demo
         self.initial_port = port or ""
@@ -101,6 +105,11 @@ class TemperatureApp:
         self.initial_over_temp = float(over_temp)
         #: 用户强制的通道数 (0 = 跟随固件自动识别)
         self.forced_channels = int(channels or 0)
+        #: 启动时选用的分度号 (默认 K)
+        self.initial_tc_type = (tc_type or DEFAULT_TYPE).upper()
+        #: 分度表集合 (扫描 tables/); 默认 K 型
+        self.tc_tables = TCTableSet(default_table_dir())
+        self.tc_table = None                     # 当前已加载的表
 
         # ---------------- 运行时状态 ----------------
         self.rx_queue: "queue.Queue[Dict]" = queue.Queue()
@@ -159,6 +168,8 @@ class TemperatureApp:
         self.autoscale_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="就绪")
         self.counters_var = tk.StringVar(value="")
+        self.tc_type_var = tk.StringVar(value=self.initial_tc_type)
+        self.tc_status_var = tk.StringVar(value="未加载")
         self.stat_vars: Dict[str, tk.StringVar] = {}
 
         # ---------------- 界面 ----------------
@@ -169,6 +180,9 @@ class TemperatureApp:
         # 命令行强制指定了通道数就先按它显示 (不等状态帧)
         if self.forced_channels:
             self._apply_active_channels(self.forced_channels)
+
+        # 加载默认分度表 (K 型)
+        self.reload_tc_table()
 
         self.refresh_ports()
         self._log("界面已启动%s" % (" (演示模式: 使用虚拟下位机)" if demo else ""))
@@ -339,6 +353,23 @@ class TemperatureApp:
             ttk.Label(box, textvariable=var, style="Stat.TLabel"
                       ).grid(row=row, column=1, sticky="e", padx=4)
 
+        # ---------- 6. 分度表 (TC_TABLE v1) ----------
+        box = ttk.LabelFrame(parent, text=" 分度表 (TC_TABLE v1) ",
+                             style="Section.TLabelframe")
+        box.grid(row=5, column=0, sticky="ew", pady=(6, 0))
+        box.columnconfigure(1, weight=1)
+        ttk.Label(box, text="分度号").grid(row=0, column=0, sticky="w", padx=4, pady=2)
+        self.tc_combo = ttk.Combobox(box, textvariable=self.tc_type_var, width=5,
+                                     state="readonly",
+                                     values=self.tc_tables.available_types or [DEFAULT_TYPE])
+        self.tc_combo.grid(row=0, column=1, sticky="w", padx=2, pady=2)
+        self.tc_combo.bind("<<ComboboxSelected>>", lambda _e: self.reload_tc_table())
+        ttk.Button(box, text="重载", width=5,
+                   command=self.reload_tc_table).grid(row=0, column=2, padx=(2, 4), pady=2)
+        ttk.Label(box, textvariable=self.tc_status_var, style="Stat.TLabel",
+                  wraplength=200, justify="left"
+                  ).grid(row=1, column=0, columnspan=3, sticky="w", padx=4, pady=(0, 4))
+
     # ------------------------------------------------------------------
     def _build_plot(self, parent: ttk.Frame) -> None:
         box = ttk.LabelFrame(parent, text=" 实时温度曲线 ", style="Section.TLabelframe")
@@ -402,6 +433,7 @@ class TemperatureApp:
         status_box.grid(row=1, column=0, sticky="ew", pady=(6, 0))
         status_box.columnconfigure(1, weight=1)
         rows = (("run", "运行状态"), ("dr", "实际采样率"), ("reject", "50/60 抑制"),
+                ("tctable", "分度表"),
                 ("rounds", "测量轮次"), ("uptime", "运行时间"), ("chip_ok", "芯片 OK 位图"),
                 ("chip_err", "芯片 ERR 位图"), ("open", "断线累计"), ("spi", "SPI 失败"),
                 ("timeout", "DRDY 超时"), ("flags", "异常标志"), ("age", "状态帧龄期"))
@@ -768,6 +800,31 @@ class TemperatureApp:
 
         if self.recorder.active:
             self.recorder.submit_status(self.last_status_time, status)
+
+    # ==================================================================
+    # 分度表 (TC_TABLE v1)
+    # ==================================================================
+    def reload_tc_table(self) -> None:
+        """加载当前选中的分度表 (默认 K 型) 并刷新界面状态。
+
+        表文件来自工程 tables/ 目录 (由 tools/nist_tc_tables.py 生成, 带 sha256)。
+        加载时会校验单位/单调性/哈希, 任何一项不过就报错而不是"带病工作"。
+        """
+        tc = (self.tc_type_var.get() or DEFAULT_TYPE).upper()
+        table = self.tc_tables.try_get(tc)
+        if table is None:
+            self.tc_table = None
+            msg = self.tc_tables.errors.get(tc, "加载失败")
+            self.tc_status_var.set("✗ %s" % msg)
+            self.stat_vars["tctable"].set("-")
+            self._log("分度表 %s 型加载失败: %s" % (tc, msg), "error")
+            return
+        self.tc_table = table
+        sha = str(table.meta.get("sha256", ""))[:8]
+        self.tc_status_var.set("%d 点 · %.0f…%.0f °C · sha %s"
+                               % (table.points, table.temp_min, table.temp_max, sha))
+        self.stat_vars["tctable"].set("%s 型 · %d 点" % (table.tc_type, table.points))
+        self._log("分度表已加载: %s   sha256 %s…" % (table.describe(), sha))
 
     def _apply_active_channels(self, count: int) -> None:
         """按本板实际通道数调整数值面板 / 勾选框 / 曲线。"""

@@ -45,6 +45,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--channels", type=int, default=0,
                         choices=[0, 4, 8, 16, 32],
                         help="强制本板通道数 (4/8/16/32); 默认 0 = 自动跟随固件上报的片数")
+    parser.add_argument("--tc-type", default="K",
+                        help="分度号 (默认 K); 需 tables/tc_type_<x>.csv 已存在")
     parser.add_argument("--data-dir", default="./data",
                         help="CSV 默认保存目录 (默认 ./data)")
     parser.add_argument("--over-temp", type=float, default=1000.0,
@@ -91,6 +93,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                          baudrate=args.baud,
                          retention=args.samples,
                          channels=args.channels,
+                         tc_type=args.tc_type,
                          record_dir=args.data_dir,
                          over_temp=args.over_temp,
                          auto_connect=not args.no_auto_connect)

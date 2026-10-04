@@ -1,0 +1,72 @@
+{
+  "schema": "TC_TABLE v1",
+  "default_type": "K",
+  "generated": "2026-10-04T10:30:01Z",
+  "types": {
+    "K": {
+      "file": "tc_type_k.csv",
+      "type": "K",
+      "points": 1643,
+      "temp_min": -270,
+      "temp_max": 1372,
+      "emf_min_uV": -6458.0,
+      "emf_max_uV": 54886.0,
+      "sha256": "678e97203fd1fb16d00bbb6521375269c8aee0134df4c7388dbf24c4c65a0f3a",
+      "max_dev_vs_reference_uV": 0.499,
+      "max_dev_vs_firmware_uV": 0.499,
+      "standard": "ITS-90 (NIST SRD 60) / IEC 60584-1 / ASTM E230 / GB/T 16839"
+    },
+    "J": {
+      "file": "tc_type_j.csv",
+      "type": "J",
+      "points": 1411,
+      "temp_min": -210,
+      "temp_max": 1200,
+      "emf_min_uV": -8095.0,
+      "emf_max_uV": 69553.0,
+      "sha256": "75086ed2cc3868f76207fb0c4a151fbeb668856f512540f50b6def6f6c3792eb",
+      "max_dev_vs_reference_uV": 0.498,
+      "max_dev_vs_firmware_uV": null,
+      "standard": "ITS-90 (NIST SRD 60) / IEC 60584-1 / ASTM E230 / GB/T 16839"
+    },
+    "T": {
+      "file": "tc_type_t.csv",
+      "type": "T",
+      "points": 671,
+      "temp_min": -270,
+      "temp_max": 400,
+      "emf_min_uV": -6258.0,
+      "emf_max_uV": 20872.0,
+      "sha256": "c1fc7c57d3f444e838e982493ec44b5b048372f70133c2dbff488b3c3062e8f1",
+      "max_dev_vs_reference_uV": 0.5,
+      "max_dev_vs_firmware_uV": null,
+      "standard": "ITS-90 (NIST SRD 60) / IEC 60584-1 / ASTM E230 / GB/T 16839"
+    },
+    "E": {
+      "file": "tc_type_e.csv",
+      "type": "E",
+      "points": 1271,
+      "temp_min": -270,
+      "temp_max": 1000,
+      "emf_min_uV": -9835.0,
+      "emf_max_uV": 76373.0,
+      "sha256": "0e39e237806b45e2f51b2dce71fd95fcee64b6ce87916cd176bcca270ba3db64",
+      "max_dev_vs_reference_uV": 0.5,
+      "max_dev_vs_firmware_uV": null,
+      "standard": "ITS-90 (NIST SRD 60) / IEC 60584-1 / ASTM E230 / GB/T 16839"
+    },
+    "N": {
+      "file": "tc_type_n.csv",
+      "type": "N",
+      "points": 1571,
+      "temp_min": -270,
+      "temp_max": 1300,
+      "emf_min_uV": -4345.0,
+      "emf_max_uV": 47513.0,
+      "sha256": "8414577a0b96c2f3da37183bd3e4817f7d707f800c52e4ff52c0f5f832eabd01",
+      "max_dev_vs_reference_uV": 0.5,
+      "max_dev_vs_firmware_uV": null,
+      "standard": "ITS-90 (NIST SRD 60) / IEC 60584-1 / ASTM E230 / GB/T 16839"
+    }
+  }
+}
