@@ -60,8 +60,8 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN Private defines */
 
-/** 固件版本: 16 x ADS1220 / 32 路 K 型热电偶 */
-#define FW_NAME            "ADS1220x16-TC32"
+/** 固件版本: 4 x ADS1220 / 8 路 K 型热电偶 */
+#define FW_NAME            "ADS1220x4-TC8"
 #define FW_VERSION_MAJOR   1u
 #define FW_VERSION_MINOR   0u
 /** 版本号 (major<<8 | minor), 通过状态帧上报 */

@@ -60,7 +60,7 @@ void MX_SPI1_Init(void)
   hspi1.Init.DataSize = SPI_DATASIZE_8BIT;          /* ADS1220 按字节收发 */
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;        /* CPOL = 0 */
   hspi1.Init.CLKPhase = SPI_PHASE_2EDGE;            /* ★ CPHA = 1 -> SPI Mode 1 */
-  hspi1.Init.NSS = SPI_NSS_SOFT;                    /* 片选由 GPIO 手动管理 (16 片) */
+  hspi1.Init.NSS = SPI_NSS_SOFT;                    /* 片选由 GPIO 手动管理 (逐片) */
   hspi1.Init.BaudRatePrescaler = ADS1220_SPI_BAUDRATE_PSC;  /* /16 -> 4.5MHz */
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;           /* ADS1220 先出 MSB */
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
@@ -100,7 +100,7 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* spiHandle)
     HAL_GPIO_Init(SPI1_GPIO_PORT, &GPIO_InitStruct);
 
     /* MISO 配成输入 + 下拉:
-       - 16 片 DOUT 并在一根线上, 未被选中的片子是高阻(手册 8.5.1.5);
+       - 多片 DOUT 并在一根线上, 未被选中的片子是高阻(手册 8.5.1.5);
        - 下拉让"某片没焊/没响应"时读回确定的全 0, 而不是随机值,
          配合 ads1220.c 里的回读校验就能把坏片识别出来。 */
     GPIO_InitStruct.Pin = SPI1_MISO_PIN;

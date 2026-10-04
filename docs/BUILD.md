@@ -37,11 +37,11 @@ Application/User/Core
 ├── gpio.c            GPIO 壳, 调用 SPI_Driver_GpioInit()
 ├── spi.c             SPI1 外设初始化 (Mode1, 2LINES, /16)
 ├── usart.c           USART1 初始化 (115200/460800) + NVIC
-├── spi_driver.c      ★ 总线层: CS 时序 / SPI 事务 / 合并 DRDY / DWT 延时
+├── spi_driver.c      ★ 总线层: CS 时序 / SPI 事务 / 每片 DRDY 轮询 / DWT 延时
 ├── ads1220.c         ★ ADS1220 驱动: 寄存器 / 指令 / 24bit 读 / 失调校准
 ├── thermocouple.c    ★ NIST ITS-90 K 型正逆多项式 + 冷端补偿 + 断线判定
 ├── uart_protocol.c   ★ 协议: CRC16 / 收帧状态机 / 中断发送环形缓冲
-├── stm32f1xx_it.c    EXTI0(合并 DRDY) + USART1 中断
+├── stm32f1xx_it.c    USART1 中断 (DRDY 已改为轮询, 无 EXTI)
 └── stm32f1xx_hal_msp.c
 ```
 
@@ -66,14 +66,14 @@ make flash        # 需要 st-flash (stlink 工具)
 
 | 外设/引脚 | 设置 |
 |---|---|
-| `PA0-WKUP` | `GPIO_EXTI0`，Pull-up，用户标签 `DRDY_N` |
+| `PA0`~`PA3` | `GPIO_Input`，Pull-up，标签 `DRDY0`~`DRDY3` |
 | `PA5/PA6/PA7` | `SPI1_SCK` / `SPI1_MISO` / `SPI1_MOSI`，Mode = `Full_Duplex_Master` |
 | `PA9/PA10` | `USART1_TX` / `USART1_RX`，Asynchronous |
 | `PA13/PA14` | `SYS_JTMS-SWDIO` / `SYS_JTCK-SWCLK` |
-| `PB0`~`PB15` | `GPIO_Output`，Speed = High，Initial Level = **High**，标签 `CS0`~`CS15` |
+| `PB0`~`PB3` | `GPIO_Output`，Speed = High，Initial Level = **High**，标签 `CS0`~`CS3` |
 | `SPI1` | Direction = `2LINES`，Master，`BaudRatePrescaler = 16` → 4.5 MBits/s |
 | `RCC` | HSE 8 MHz，PLL ×9 = 72 MHz，**APB2 = HCLK/1 = 72 MHz** |
-| `NVIC` | `EXTI0_IRQn` 抢占优先级 1；`USART1_IRQn` 抢占优先级 2 |
+| `NVIC` | `USART1_IRQn` 抢占优先级 2（DRDY 用轮询，**无 EXTI 中断**） |
 
 ### 重新生成后必须确认的 4 件事
 
@@ -81,7 +81,7 @@ CubeMX 会重写 `gpio.c` / `spi.c` / `usart.c`，但它**保留 `USER CODE` 区
 本工程把所有"容易丢"的初始化都塞进了 `USER CODE` 或独立模块，重新生成后检查：
 
 1. `Core/Src/gpio.c` 的 `MX_GPIO_Init()` 末尾 `USER CODE BEGIN 2` 里
-   那一行 `SPI_Driver_GpioInit();` **还在**（16 路 CS + PA0 EXTI 全靠它）。
+   那一行 `SPI_Driver_GpioInit();` **还在**（4 路 CS(PB0..PB3) + 4 路 DRDY(PA0..PA3) 全靠它）。
 2. `Core/Src/spi.c` 的 `MX_SPI1_Init()` 里
    `Direction = SPI_DIRECTION_2LINES`、`CLKPhase = SPI_PHASE_2EDGE`、
    `BaudRatePrescaler = ADS1220_SPI_BAUDRATE_PSC`。
@@ -89,7 +89,7 @@ CubeMX 会重写 `gpio.c` / `spi.c` / `usart.c`，但它**保留 `USER CODE` 区
 3. `Core/Src/usart.c` 里 `huart1.Init.BaudRate = UART_BAUDRATE;`
    和 `HAL_UART_MspInit()` 里的 `HAL_NVIC_EnableIRQ(USART1_IRQn)`。
 4. `Core/Src/stm32f1xx_it.c` 的 `USER CODE BEGIN 1` 里
-   `EXTI0_IRQHandler()` 与 `USART1_IRQHandler()` 还在。
+   `USART1_IRQHandler()` 还在（EXTI0 已移除，不会再生成 `EXTI0_IRQHandler`）。
 
 > 换句话说：**即使你完全不用 CubeMX 重新生成，现有文件也能直接编译**；
 > 上面的检查清单只是给"以后要加外设、必须重新生成"的情况准备的。
@@ -122,7 +122,7 @@ HSE 8 MHz ──► PLL ×9 ──► SYSCLK = 72 MHz ──► HCLK = 72 MHz (A
 
 代码已经把 MCU 相关的分支用 `BOARD_MCU_FAMILY_F1` / `BOARD_MCU_FAMILY_F4`
 （`board_config.h` 用 HAL 头文件的 include guard 自动判定）隔离好了。
-引脚拓扑（CS=PB0~PB15、DRDY=PC0~PC15 或本设计的合并 DRDY）**不需要变**。
+引脚拓扑（CS=PB0~PB3、DRDY=PA0~PA3 每片一根）**不需要变**。
 
 要改的只有这些：
 
@@ -135,7 +135,6 @@ HSE 8 MHz ──► PLL ×9 ──► SYSCLK = 72 MHz ──► HCLK = 72 MHz (A
 | 系统文件 | `system_stm32f1xx.c` | `system_stm32f4xx.c` |
 | `SystemClock_Config()` | HSE×9=72 MHz，APB2=/1 | HSE×PLL → 168 MHz，APB2=/2=84 MHz |
 | SPI 分频 | `/16` → 72/16 = **4.5 MHz** | `/16` → 84/16 = **5.25 MHz**（仍 ≤6.67 MHz ✔，宏不用改） |
-| EXTI 复用寄存器 | `AFIO->EXTICR`（`__HAL_RCC_AFIO_CLK_ENABLE()`） | `SYSCFG->EXTICR`（`__HAL_RCC_SYSCFG_CLK_ENABLE()`） |
 | GPIO 高速档 | `GPIO_SPEED_FREQ_HIGH` = 50 MHz | `GPIO_SPEED_FREQ_VERY_HIGH`（100 MHz）；`HIGH` 只有 25 MHz |
 | SWD 引脚 | PA13/PA14 | PA13/PA14（相同） |
 | `stm32f1xx_it.c/h` | 文件名带 f1 | 改成 `stm32f4xx_it.c/h`，异常处理名称一致 |
@@ -143,15 +142,15 @@ HSE 8 MHz ──► PLL ×9 ──► SYSCLK = 72 MHz ──► HCLK = 72 MHz (A
 `spi_driver.c` 里已经写好了 `#if defined(BOARD_MCU_FAMILY_F1) / #else` 两个分支，
 **应用层（`ads1220.c` / `thermocouple.c` / `uart_protocol.c` / `main.c`）一行都不用改。**
 
-> 反过来：**STM32F103C8 不改，就用当前这一份**。16 路 CS 用满 PB0~PB15，
-> 加上 SPI1(3) + USART1(2) + SWD(2) + 合并 DRDY(1) 共 24 个 IO，
-> LQFP48 的 35 个可用 IO 完全够（剩余 PA1~PA4、PA8、PA11、PA12、PA15、PC13~PC15）。
+> 反过来：**STM32F103C8 不改，就用当前这一份**。4 路 CS(PB0~PB3) + 4 路 DRDY(PA0~PA3)
+> + SPI1(3) + USART1(2) + SWD(2) 共 **15 个 IO**，LQFP48 的 35 个可用 IO 完全够
+> （剩余 20 个可留作指示灯/蜂鸣器/预留）。
 
 ---
 
 ## 6. 上电后应该看到什么
 
-1. 上电 → 约 50 ms 电源等待 → 16 片 RESET → 1 ms → 写 4 个寄存器 → 回读校验
+1. 上电 → 约 50 ms 电源等待 → 4 片 RESET → 1 ms → 写 4 个寄存器 → 回读校验
    → 4 次失调校准（约 210 ms）→ START。
 2. 之后每约 150 ms 通过 USART1 吐出 **133 字节**的上行温度帧（`55 10 80 ...`）。
 3. 每 5 s 自动推一帧状态帧（`55 11 18 ...`），也可以在收到命令后立即回一帧。
@@ -160,7 +159,7 @@ HSE 8 MHz ──► PLL ×9 ──► SYSCLK = 72 MHz ──► HCLK = 72 MHz (A
 
 ```bash
 python host_parser.py --test          # 先跑协议自检 (不需要硬件)
-python host_parser.py COM3            # 打开串口实时打印 32 路温度
+python host_parser.py COM3            # 打开串口实时打印温度
 python host_parser.py COM3 --stop     # 停止采集 (状态帧里 run=0)
 python host_parser.py COM3 --set-rate 0 1   # 20SPS + 同时抑制 50/60Hz
 python host_parser.py COM3 --single 5       # 单次读第 5 通道
@@ -171,8 +170,8 @@ python host_parser.py COM3 --single 5       # 单次读第 5 通道
 | 现象 | 先查什么 |
 |---|---|
 | 完全没有串口输出 | PA9/PA10 接线、波特率、`USART1_IRQn` 是否使能、是否 `App_Start()` 被调用 |
-| 有输出但 32 路全是 `----`(NaN) | 状态帧 `chip_ok` 位图。全 0 → SPI 没通（SCK/MOSI/MISO 接反、共地、SPI Mode 配成了 Mode 0） |
+| 有输出但 8 路全是 `----`(NaN) | 状态帧 `chip_ok` 位图。全 0 → SPI 没通（SCK/MOSI/MISO 接反、共地、SPI Mode 配成了 Mode 0） |
 | `chip_ok` 只有部分位是 1 | `chip_err` 位图 + 对应片子的 CS 焊点；那几片的 MISO 没接上或被短路 |
-| 状态帧 `flags` 有 `DRDY静默(0x02)` | PA0 有没有接对、74HC30/74HC132 供电、`EXTI0_IRQn` 使能 |
+| 状态帧 `flags` 有 `DRDY静默(0x02)` | 每片 DRDY 有没有接对 (PA0~PA3)、没焊/断路的片是否被上拉钳高 |
 | 温度数值离谱 | 冷端传感器读到的不是环境温度 → 检查 `TS` 位切换、以及 CONFIG0 在 TS=1 时无效这一点 |
 | 断线报太多 | `BCS` 常开导致的失调（见 `docs/TIMING.md` §9），把 `TC_BCS_ALWAYS_ON` 改 0 |

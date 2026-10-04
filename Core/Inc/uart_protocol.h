@@ -41,7 +41,7 @@
   *    0x02 启动/停止采集: DATA[0] = 0 停止 / 1 启动。  应答: 0x11 状态帧
   *
   *    0x03 读取单次温度: DATA 可省略;
-  *           LEN = 0 或 DATA[0] = 0xFF  -> 全部 32 路
+  *           LEN = 0 或 DATA[0] = 0xFF  -> 全部通道 (协议固定 32 槽)
   *           LEN = 1 且 DATA[0] = 0..31 -> 只报该通道 (其余填 NaN)
   *           应答: 0x10 温度帧
   ******************************************************************************
@@ -63,7 +63,7 @@ extern "C" {
 #define UART_FRAME_HEAD_DOWN   0xAAu   /**< 下行帧头 (PC -> MCU) */
 #define UART_FRAME_HEAD_UP     0x55u   /**< 上行帧头 (MCU -> PC) */
 
-#define UART_CMD_UP_TEMP       0x10u   /**< 上行: 32 路温度 */
+#define UART_CMD_UP_TEMP       0x10u   /**< 上行: 温度帧 (固定 32 槽, 本板用前 8 槽) */
 #define UART_CMD_UP_STATUS     0x11u   /**< 上行: 状态 */
 
 #define UART_CMD_DOWN_SET_RATE 0x01u   /**< 下行: 设置采样率 */
@@ -108,7 +108,7 @@ extern "C" {
 #define UART_ST_ROUND_HI      10u
 #define UART_ST_UPTIME_LO     11u   /**< u32 小端: 运行时间 ms */
 #define UART_ST_UPTIME_HI     14u
-#define UART_ST_DRDY_CNT_LO   15u   /**< u16 小端: 合并 DRDY 中断计数(低16位) */
+#define UART_ST_DRDY_CNT_LO   15u   /**< u16 小端: "全部就绪"次数(低16位) */
 #define UART_ST_DRDY_CNT_HI   16u
 #define UART_ST_SPI_ERR_LO    17u   /**< u16 小端: SPI 事务失败累计 */
 #define UART_ST_SPI_ERR_HI    18u

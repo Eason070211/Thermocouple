@@ -149,7 +149,7 @@ extern "C" {
  *       docs/HARDWARE_8CH.md 的说明)
  *============================================================================*/
 #define ADS1220_CS_PORT           GPIOB
-/** 第 chip 片的片选掩码 (chip = 0..CHIP_COUNT-1 => PB0..PB15) */
+/** 第 chip 片的片选掩码 (chip = 0..CHIP_COUNT-1 => PB0..PB3) */
 #define ADS1220_CS_PIN(chip)      ((uint16_t)(1u << (chip)))
 /** 本板实际用到的全部片选掩码 (只覆盖已配置的片数, 不会去动 PB4..PB15) */
 #define ADS1220_CS_MASK_ALL       ((uint16_t)((1u << ADS1220_CHIP_COUNT) - 1u))

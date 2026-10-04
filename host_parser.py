@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-16 x ADS1220 / 32 路热电偶测温系统 —— 命令行上位机工具
+N x ADS1220 / 2N 路热电偶测温系统 (本板 4 片 / 8 路) —— 命令行上位机工具
 
 协议实现只有一处: **pc_ui/protocol.py**(它同时被 pc_ui/serial_reader.py 使用),
 本文件只是它的命令行外壳, 不再重复一份 CRC / 组帧逻辑 —— 避免两边算法漂移。
@@ -11,7 +11,7 @@
 
 用法:
     python host_parser.py --test                 # 协议自检 (不需要硬件)
-    python host_parser.py COM3                   # 读串口并实时打印 32 路温度
+    python host_parser.py COM3                   # 读串口并实时打印温度
     python host_parser.py /dev/ttyUSB0 -b 460800
     python host_parser.py COM3 --set-rate 0 1    # 20SPS + 同时抑制 50/60Hz
     python host_parser.py COM3 --stop
@@ -150,7 +150,7 @@ def run_serial(port, baud, commands, duration=None):
 # ---------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(
-        description="16xADS1220 / 32 路热电偶 上位机命令行工具",
+        description="N×ADS1220 热电偶 上位机命令行工具 (本板 4 片 / 8 路)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="DR 索引: " + "  ".join("%d=%dSPS" % (i, s) for i, s in enumerate(DR_TABLE)) +
                "\n抑制索引: " + "  ".join("%d=%s" % (i, s) for i, s in enumerate(REJECT_TABLE)),
@@ -164,7 +164,7 @@ def main():
     ap.add_argument("--start", action="store_true", help="启动采集")
     ap.add_argument("--stop", action="store_true", help="停止采集")
     ap.add_argument("--single", type=int, metavar="CH", nargs="?", const=CH_SINGLE_ALL,
-                    help="读取单次温度 (CH=0..31, 省略=全部)")
+                    help="读取单次温度 (CH=0..31 为协议槽位; 本板 0..7 有效, 省略=全部)")
     ap.add_argument("--duration", type=float, default=None, help="接收秒数后自动退出")
 
     args = ap.parse_args()

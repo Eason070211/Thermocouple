@@ -1,8 +1,8 @@
 Dependencies for Project 'Thermocouple', Target 'Thermocouple': (DO NOT MODIFY !)
 CompilerVersion: 6240000::V6.24::ARMCLANG
-F (startup_stm32f103xb.s)(0x6A9BB1E1)(--target=arm-arm-none-eabi -mcpu=cortex-m3 -masm=auto  -Wa,armasm,--diag_suppress=A1950W -c-gdwarf-4-I./RTE/_Thermocouple-ID:/keil/pack/ARM/CMSIS/6.3.0/CMSIS/Core/Include-ID:/keil/pack/Keil/STM32F1xx_DFP/2.4.1/Device/Include-Wa,armasm,--pd,"__UVISION_VERSION SETA 543" -Wa,armasm,--pd,"STM32F10X_MD SETA 1" -Wa,armasm,--pd,"_RTE_ SETA 1"-o thermocouple/startup_stm32f103xb.o)
-F (../Core/Src/main.c)(0x6AA35D08)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m3 -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O3 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/CMSIS/Include-I./RTE/_Thermocouple-ID:/keil/pack/ARM/CMSIS/6.3.0/CMSIS/Core/Include-ID:/keil/pack/Keil/STM32F1xx_DFP/2.4.1/Device/Include-D__UVISION_VERSION="543" -DSTM32F10X_MD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xB-o thermocouple/main.o -MMD)
-I (..\Core\Inc\main.h)(0x6A9BB1DF)
+F (startup_stm32f103xb.s)(0x6ABD70F4)(--target=arm-arm-none-eabi -mcpu=cortex-m3 -masm=auto  -Wa,armasm,--diag_suppress=A1950W -c-gdwarf-4-I./RTE/_Thermocouple-ID:/keil/pack/ARM/CMSIS/6.3.0/CMSIS/Core/Include-ID:/keil/pack/Keil/STM32F1xx_DFP/2.4.1/Device/Include-Wa,armasm,--pd,"__UVISION_VERSION SETA 543" -Wa,armasm,--pd,"STM32F10X_MD SETA 1" -Wa,armasm,--pd,"_RTE_ SETA 1"-o thermocouple/startup_stm32f103xb.o)
+F (../Core/Src/main.c)(0x6ABFBF14)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m3 -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O3 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/CMSIS/Include-I./RTE/_Thermocouple-ID:/keil/pack/ARM/CMSIS/6.3.0/CMSIS/Core/Include-ID:/keil/pack/Keil/STM32F1xx_DFP/2.4.1/Device/Include-D__UVISION_VERSION="543" -DSTM32F10X_MD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xB-o thermocouple/main.o -MMD)
+I (..\Core\Inc\main.h)(0x6AC0D545)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal.h)(0x6A00EDDF)
 I (..\Core\Inc\stm32f1xx_hal_conf.h)(0x6A9BB1DF)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_rcc.h)(0x6A00EDDF)
@@ -27,9 +27,14 @@ I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_uart.h)(0x6A00EDDF)
 I (..\Core\Inc\spi.h)(0x6A9BB1DF)
 I (..\Core\Inc\usart.h)(0x6A9BB1DF)
 I (..\Core\Inc\gpio.h)(0x6A9BB1DE)
-F (../Core/Src/gpio.c)(0x6A9BB1DE)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m3 -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O3 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/CMSIS/Include-I./RTE/_Thermocouple-ID:/keil/pack/ARM/CMSIS/6.3.0/CMSIS/Core/Include-ID:/keil/pack/Keil/STM32F1xx_DFP/2.4.1/Device/Include-D__UVISION_VERSION="543" -DSTM32F10X_MD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xB-o thermocouple/gpio.o -MMD)
+I (..\Core\Inc\board_config.h)(0x6AC0D726)
+I (..\Core\Inc\spi_driver.h)(0x6ABFBE9D)
+I (..\Core\Inc\ads1220.h)(0x6AC0D726)
+I (..\Core\Inc\thermocouple.h)(0x6ABD6FE0)
+I (..\Core\Inc\uart_protocol.h)(0x6AC0D726)
+F (../Core/Src/gpio.c)(0x6ABFBF19)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m3 -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O3 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/CMSIS/Include-I./RTE/_Thermocouple-ID:/keil/pack/ARM/CMSIS/6.3.0/CMSIS/Core/Include-ID:/keil/pack/Keil/STM32F1xx_DFP/2.4.1/Device/Include-D__UVISION_VERSION="543" -DSTM32F10X_MD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xB-o thermocouple/gpio.o -MMD)
 I (..\Core\Inc\gpio.h)(0x6A9BB1DE)
-I (..\Core\Inc\main.h)(0x6A9BB1DF)
+I (..\Core\Inc\main.h)(0x6AC0D545)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal.h)(0x6A00EDDF)
 I (..\Core\Inc\stm32f1xx_hal_conf.h)(0x6A9BB1DF)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_rcc.h)(0x6A00EDDF)
@@ -51,9 +56,11 @@ I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_flash_ex.h)(0x6A00EDDF)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_pwr.h)(0x6A00EDDF)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_spi.h)(0x6A00EDDF)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_uart.h)(0x6A00EDDF)
-F (../Core/Src/spi.c)(0x6A9BB78A)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m3 -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O3 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/CMSIS/Include-I./RTE/_Thermocouple-ID:/keil/pack/ARM/CMSIS/6.3.0/CMSIS/Core/Include-ID:/keil/pack/Keil/STM32F1xx_DFP/2.4.1/Device/Include-D__UVISION_VERSION="543" -DSTM32F10X_MD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xB-o thermocouple/spi.o -MMD)
+I (..\Core\Inc\board_config.h)(0x6AC0D726)
+I (..\Core\Inc\spi_driver.h)(0x6ABFBE9D)
+F (../Core/Src/spi.c)(0x6AC0D726)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m3 -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O3 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/CMSIS/Include-I./RTE/_Thermocouple-ID:/keil/pack/ARM/CMSIS/6.3.0/CMSIS/Core/Include-ID:/keil/pack/Keil/STM32F1xx_DFP/2.4.1/Device/Include-D__UVISION_VERSION="543" -DSTM32F10X_MD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xB-o thermocouple/spi.o -MMD)
 I (..\Core\Inc\spi.h)(0x6A9BB1DF)
-I (..\Core\Inc\main.h)(0x6A9BB1DF)
+I (..\Core\Inc\main.h)(0x6AC0D545)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal.h)(0x6A00EDDF)
 I (..\Core\Inc\stm32f1xx_hal_conf.h)(0x6A9BB1DF)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_rcc.h)(0x6A00EDDF)
@@ -75,9 +82,10 @@ I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_flash_ex.h)(0x6A00EDDF)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_pwr.h)(0x6A00EDDF)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_spi.h)(0x6A00EDDF)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_uart.h)(0x6A00EDDF)
-F (../Core/Src/usart.c)(0x6A9BB1DF)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m3 -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O3 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/CMSIS/Include-I./RTE/_Thermocouple-ID:/keil/pack/ARM/CMSIS/6.3.0/CMSIS/Core/Include-ID:/keil/pack/Keil/STM32F1xx_DFP/2.4.1/Device/Include-D__UVISION_VERSION="543" -DSTM32F10X_MD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xB-o thermocouple/usart.o -MMD)
+I (..\Core\Inc\board_config.h)(0x6AC0D726)
+F (../Core/Src/usart.c)(0x6ABD70B2)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m3 -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O3 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/CMSIS/Include-I./RTE/_Thermocouple-ID:/keil/pack/ARM/CMSIS/6.3.0/CMSIS/Core/Include-ID:/keil/pack/Keil/STM32F1xx_DFP/2.4.1/Device/Include-D__UVISION_VERSION="543" -DSTM32F10X_MD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xB-o thermocouple/usart.o -MMD)
 I (..\Core\Inc\usart.h)(0x6A9BB1DF)
-I (..\Core\Inc\main.h)(0x6A9BB1DF)
+I (..\Core\Inc\main.h)(0x6AC0D545)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal.h)(0x6A00EDDF)
 I (..\Core\Inc\stm32f1xx_hal_conf.h)(0x6A9BB1DF)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_rcc.h)(0x6A00EDDF)
@@ -99,8 +107,10 @@ I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_flash_ex.h)(0x6A00EDDF)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_pwr.h)(0x6A00EDDF)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_spi.h)(0x6A00EDDF)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_uart.h)(0x6A00EDDF)
-F (../Core/Src/stm32f1xx_it.c)(0x6A9BB1DF)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m3 -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O3 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/CMSIS/Include-I./RTE/_Thermocouple-ID:/keil/pack/ARM/CMSIS/6.3.0/CMSIS/Core/Include-ID:/keil/pack/Keil/STM32F1xx_DFP/2.4.1/Device/Include-D__UVISION_VERSION="543" -DSTM32F10X_MD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xB-o thermocouple/stm32f1xx_it.o -MMD)
-I (..\Core\Inc\main.h)(0x6A9BB1DF)
+I (..\Core\Inc\board_config.h)(0x6AC0D726)
+F (../Core/Src/spi_driver.c)(0x6ABFBE98)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m3 -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O3 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/CMSIS/Include-I./RTE/_Thermocouple-ID:/keil/pack/ARM/CMSIS/6.3.0/CMSIS/Core/Include-ID:/keil/pack/Keil/STM32F1xx_DFP/2.4.1/Device/Include-D__UVISION_VERSION="543" -DSTM32F10X_MD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xB-o thermocouple/spi_driver.o -MMD)
+I (..\Core\Inc\spi_driver.h)(0x6ABFBE9D)
+I (..\Core\Inc\main.h)(0x6AC0D545)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal.h)(0x6A00EDDF)
 I (..\Core\Inc\stm32f1xx_hal_conf.h)(0x6A9BB1DF)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_rcc.h)(0x6A00EDDF)
@@ -122,9 +132,114 @@ I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_flash_ex.h)(0x6A00EDDF)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_pwr.h)(0x6A00EDDF)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_spi.h)(0x6A00EDDF)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_uart.h)(0x6A00EDDF)
-I (..\Core\Inc\stm32f1xx_it.h)(0x6A9BB1DF)
+I (..\Core\Inc\board_config.h)(0x6AC0D726)
+I (..\Core\Inc\spi.h)(0x6A9BB1DF)
+F (../Core/Src/ads1220.c)(0x6AC0D726)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m3 -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O3 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/CMSIS/Include-I./RTE/_Thermocouple-ID:/keil/pack/ARM/CMSIS/6.3.0/CMSIS/Core/Include-ID:/keil/pack/Keil/STM32F1xx_DFP/2.4.1/Device/Include-D__UVISION_VERSION="543" -DSTM32F10X_MD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xB-o thermocouple/ads1220.o -MMD)
+I (..\Core\Inc\ads1220.h)(0x6AC0D726)
+I (..\Core\Inc\main.h)(0x6AC0D545)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal.h)(0x6A00EDDF)
+I (..\Core\Inc\stm32f1xx_hal_conf.h)(0x6A9BB1DF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_rcc.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_def.h)(0x6A00EDDF)
+I (..\Drivers\CMSIS\Device\ST\STM32F1xx\Include\stm32f1xx.h)(0x6A00EDDF)
+I (..\Drivers\CMSIS\Device\ST\STM32F1xx\Include\stm32f103xb.h)(0x6A00EDDF)
+I (..\Drivers\CMSIS\Include\core_cm3.h)(0x6A00EDD6)
+I (..\Drivers\CMSIS\Device\ST\STM32F1xx\Include\system_stm32f1xx.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\Legacy\stm32_hal_legacy.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_rcc_ex.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_gpio.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_gpio_ex.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_exti.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_dma.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_dma_ex.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_cortex.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_flash.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_flash_ex.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_pwr.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_spi.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_uart.h)(0x6A00EDDF)
+I (..\Core\Inc\board_config.h)(0x6AC0D726)
+I (..\Core\Inc\spi_driver.h)(0x6ABFBE9D)
+F (../Core/Src/thermocouple.c)(0x6ABD6FF1)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m3 -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O3 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/CMSIS/Include-I./RTE/_Thermocouple-ID:/keil/pack/ARM/CMSIS/6.3.0/CMSIS/Core/Include-ID:/keil/pack/Keil/STM32F1xx_DFP/2.4.1/Device/Include-D__UVISION_VERSION="543" -DSTM32F10X_MD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xB-o thermocouple/thermocouple.o -MMD)
+I (..\Core\Inc\thermocouple.h)(0x6ABD6FE0)
+I (..\Core\Inc\main.h)(0x6AC0D545)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal.h)(0x6A00EDDF)
+I (..\Core\Inc\stm32f1xx_hal_conf.h)(0x6A9BB1DF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_rcc.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_def.h)(0x6A00EDDF)
+I (..\Drivers\CMSIS\Device\ST\STM32F1xx\Include\stm32f1xx.h)(0x6A00EDDF)
+I (..\Drivers\CMSIS\Device\ST\STM32F1xx\Include\stm32f103xb.h)(0x6A00EDDF)
+I (..\Drivers\CMSIS\Include\core_cm3.h)(0x6A00EDD6)
+I (..\Drivers\CMSIS\Device\ST\STM32F1xx\Include\system_stm32f1xx.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\Legacy\stm32_hal_legacy.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_rcc_ex.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_gpio.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_gpio_ex.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_exti.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_dma.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_dma_ex.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_cortex.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_flash.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_flash_ex.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_pwr.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_spi.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_uart.h)(0x6A00EDDF)
+I (..\Core\Inc\board_config.h)(0x6AC0D726)
+F (../Core/Src/uart_protocol.c)(0x6ABFBEC6)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m3 -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O3 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/CMSIS/Include-I./RTE/_Thermocouple-ID:/keil/pack/ARM/CMSIS/6.3.0/CMSIS/Core/Include-ID:/keil/pack/Keil/STM32F1xx_DFP/2.4.1/Device/Include-D__UVISION_VERSION="543" -DSTM32F10X_MD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xB-o thermocouple/uart_protocol.o -MMD)
+I (..\Core\Inc\uart_protocol.h)(0x6AC0D726)
+I (..\Core\Inc\main.h)(0x6AC0D545)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal.h)(0x6A00EDDF)
+I (..\Core\Inc\stm32f1xx_hal_conf.h)(0x6A9BB1DF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_rcc.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_def.h)(0x6A00EDDF)
+I (..\Drivers\CMSIS\Device\ST\STM32F1xx\Include\stm32f1xx.h)(0x6A00EDDF)
+I (..\Drivers\CMSIS\Device\ST\STM32F1xx\Include\stm32f103xb.h)(0x6A00EDDF)
+I (..\Drivers\CMSIS\Include\core_cm3.h)(0x6A00EDD6)
+I (..\Drivers\CMSIS\Device\ST\STM32F1xx\Include\system_stm32f1xx.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\Legacy\stm32_hal_legacy.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_rcc_ex.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_gpio.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_gpio_ex.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_exti.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_dma.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_dma_ex.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_cortex.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_flash.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_flash_ex.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_pwr.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_spi.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_uart.h)(0x6A00EDDF)
+I (..\Core\Inc\board_config.h)(0x6AC0D726)
+I (..\Core\Inc\usart.h)(0x6A9BB1DF)
+F (../Core/Src/stm32f1xx_it.c)(0x6ABFBEA5)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m3 -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O3 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/CMSIS/Include-I./RTE/_Thermocouple-ID:/keil/pack/ARM/CMSIS/6.3.0/CMSIS/Core/Include-ID:/keil/pack/Keil/STM32F1xx_DFP/2.4.1/Device/Include-D__UVISION_VERSION="543" -DSTM32F10X_MD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xB-o thermocouple/stm32f1xx_it.o -MMD)
+I (..\Core\Inc\main.h)(0x6AC0D545)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal.h)(0x6A00EDDF)
+I (..\Core\Inc\stm32f1xx_hal_conf.h)(0x6A9BB1DF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_rcc.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_def.h)(0x6A00EDDF)
+I (..\Drivers\CMSIS\Device\ST\STM32F1xx\Include\stm32f1xx.h)(0x6A00EDDF)
+I (..\Drivers\CMSIS\Device\ST\STM32F1xx\Include\stm32f103xb.h)(0x6A00EDDF)
+I (..\Drivers\CMSIS\Include\core_cm3.h)(0x6A00EDD6)
+I (..\Drivers\CMSIS\Device\ST\STM32F1xx\Include\system_stm32f1xx.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\Legacy\stm32_hal_legacy.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_rcc_ex.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_gpio.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_gpio_ex.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_exti.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_dma.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_dma_ex.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_cortex.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_flash.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_flash_ex.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_pwr.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_spi.h)(0x6A00EDDF)
+I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_uart.h)(0x6A00EDDF)
+I (..\Core\Inc\stm32f1xx_it.h)(0x6ABFBEA8)
+I (..\Core\Inc\board_config.h)(0x6AC0D726)
+I (..\Core\Inc\spi_driver.h)(0x6ABFBE9D)
+I (..\Core\Inc\usart.h)(0x6A9BB1DF)
 F (../Core/Src/stm32f1xx_hal_msp.c)(0x6A9BB1DF)(-xc -std=c99 --target=arm-arm-none-eabi -mcpu=cortex-m3 -c-fno-rtti -funsigned-char -fshort-enums -fshort-wchar-gdwarf-4 -O3 -ffunction-sections -Wno-packed -Wno-missing-variable-declarations -Wno-missing-prototypes -Wno-missing-noreturn -Wno-sign-conversion -Wno-nonportable-include-path -Wno-reserved-id-macro -Wno-unused-macros -Wno-documentation-unknown-command -Wno-documentation -Wno-license-management -Wno-parentheses-equality -Wno-reserved-identifier -I ../Core/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc -I ../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F1xx/Include -I ../Drivers/CMSIS/Include-I./RTE/_Thermocouple-ID:/keil/pack/ARM/CMSIS/6.3.0/CMSIS/Core/Include-ID:/keil/pack/Keil/STM32F1xx_DFP/2.4.1/Device/Include-D__UVISION_VERSION="543" -DSTM32F10X_MD -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F103xB-o thermocouple/stm32f1xx_hal_msp.o -MMD)
-I (..\Core\Inc\main.h)(0x6A9BB1DF)
+I (..\Core\Inc\main.h)(0x6AC0D545)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal.h)(0x6A00EDDF)
 I (..\Core\Inc\stm32f1xx_hal_conf.h)(0x6A9BB1DF)
 I (..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_rcc.h)(0x6A00EDDF)

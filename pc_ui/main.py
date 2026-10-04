@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-命令行入口 —— 32 路热电偶测温上位机
+命令行入口 —— N×ADS1220 热电偶测温上位机 (本板 4 片 / 8 路)
 
 用法示例
 --------
@@ -33,7 +33,7 @@ except ImportError:                   # 直接跑脚本 (python pc_ui/main.py)
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tc-monitor",
-        description="32 路热电偶测温上位机 (STM32F103 + 16×ADS1220, 协议 55/AA + CRC16/MODBUS)",
+        description="N×ADS1220 热电偶测温上位机 (STM32F103, 本板 4 片 8 路; 协议 55/AA + CRC16/MODBUS)",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("-p", "--port", help="串口名, 如 COM3 / /dev/ttyUSB0")
     parser.add_argument("-b", "--baud", type=int, default=115200,

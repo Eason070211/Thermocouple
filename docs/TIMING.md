@@ -1,4 +1,4 @@
-# 时序细节汇总 (ADS1220 × 16 / STM32F103C8T6)
+# 时序细节汇总 (ADS1220 × 4 / STM32F103C8T6)
 
 > 所有数值均出自 **TI ADS1220 数据手册 SBAS501D**（用户提供的那份 PDF），
 > 章节号在每条后面标注。固件里对应的宏定义在 `Core/Inc/board_config.h`。
@@ -73,7 +73,7 @@ STM32 的 Mode 1（CPOL=0, CPHA=1，HAL 里是
 需求里写的是 SCLK ≤ 10 MHz，但 SBAS501D 6.6 节给出的
 `tc(SC) MIN = 150 ns` 对应 **f_SCLK ≤ 6.67 MHz**。10 MHz 会超规格。
 固件取 **4.5 MHz**：是 72 MHz 的整数分频（/16），有 48% 裕量，
-一帧 4 字节事务约 7.1 µs + 开销，16 片批量读一次约 200 µs。
+一帧 4 字节事务约 7.1 µs + 开销，4 片批量读一次约 30~50 µs。
 
 ### 关于 `tDATA`（需求里"至少 1 个 CLK 周期"）
 
@@ -84,7 +84,7 @@ STM32 的 Mode 1（CPOL=0, CPHA=1，HAL 里是
 
 也就是说 DRDY 下降沿时数据已经准备好了。固件仍然保守地插入
 `ADS1220_T_DATA_US = 2 µs ≈ 8 × t_CLK`（对应需求里的"至少 1 个 CLK 周期"），
-用来覆盖：74HC30/74HC132 的传播延迟 + EXTI 中断响应延迟 + `td(CSSC)` 建立时间。
+用来覆盖：DRDY 走线/上拉的建立时间 + 主循环轮询响应延迟 + `td(CSSC)` 建立时间。
 
 ---
 
@@ -111,45 +111,46 @@ STM32 的 Mode 1（CPOL=0, CPHA=1，HAL 里是
 ### DRDY 的电气行为（8.5.1.3）—— 决定本设计的拓扑
 
 * DRDY 是**低有效、主动推挽输出**，"is always actively driven, **even when CS is high**"
-  → 所以 16 路 DRDY 可以直接进 74HC30/74HC132 与非网络，不需要三态缓冲。
+  → 每片 DRDY 直接进 MCU（PA0~PA3），不需要三态缓冲，也不需要外部逻辑门。
 * "DRDY transitions back high on **the next SCLK rising edge**"
-  → 读完数据后合并信号自动恢复高，**不需要任何复位逻辑**（与需求描述一致）。
+  → 读完数据后 DRDY 自动恢复高，**不需要任何复位逻辑**（与需求描述一致）。
 * "When no data are read during continuous conversion mode, DRDY remains low but
   pulses high for a duration of **2 × t_MOD ≈ 7.8 µs** prior to the next DRDY falling edge."
   → 连续模式下 DRDY 是"低电平为主 + 每周期 7.8 µs 高脉冲"，
-  合并后的 PA0 每个转换周期都会产生一次下降沿，EXTI0 能可靠捕获。
+  主循环逐片轮询电平即可可靠捕获，每片独立，互不影响。
 
 ### 等待窗口是怎么定的（`App_StartWait()` / `App_WaitDone()`）
 
-因为合并后的 DRDY **无法分辨是哪一片**，固件采用"广播重同步 + 时间门限"：
+每片一根 DRDY，固件用**软件轮询**合成"全部就绪"：
 
-1. 每次切换 MUX / TS 后，对 16 片**逐片**发 `WREG` + `START/SYNC`。
-   START/SYNC 会复位数字滤波器并重启转换，16 片重新对齐（彼此只差几十 µs）。
+1. 每次切换 MUX / TS 后，对 4 片**逐片**发 `WREG` + `START/SYNC`。
+   START/SYNC 会复位数字滤波器并重启转换，4 片重新对齐（彼此只差几十 µs）。
 2. 等待窗口同时满足两个条件才继续：
    * **最小等待** = 实际转换时间 × 9/10（20 SPS 时 = 44 ms）
      —— 保证读到的是新通道的数据，不是切换前的旧数据；
-   * 合并 DRDY 的中断标志已置位（ISR 只置标志位）。
+   * **4 根 DRDY（PA0~PA3）全部为低**（逐片轮询，采样间隔 ≤ 数 µs）。
 3. **超时** = 转换时间 + 25 ms，超时则 `phase_timeout_count++` 并继续，
-   保证流程永不卡死。
+   保证流程永不卡死；哪片一直拉高会在 `chip_err` 位图里体现，
+   状态帧 `flags` 同时置 `DRDY_PARTIAL(0x20)`。
 
 ### 一轮测量要多久
 
 ```
 SET(CONFIG0: MUX=A) + START  ─┐
   等 1 个转换周期              │  ~50 ms
-  读 16 片 × 3 字节            ┘
+  读 4 片 × 3 字节             ┘
 SET(MUX=B) + START           ─┐
   等 1 个转换周期              │  ~50 ms
-  读 16 片                     ┘
+  读 4 片                      ┘
 SET(CONFIG1: TS=1) + START   ─┐
   等 1 个转换周期              │  ~50 ms
-  读 16 片（内部温度）          ┘
+  读 4 片（内部温度）           ┘
 SET(TS=0, MUX=A) + START        <-- 同时开始下一轮的 A 通道
 上报 133 字节                    <-- 与 50 ms 转换时间重叠
 ```
 
 所以 **20 SPS 下整轮 ≈ 3 × 50 = 150 ms（实测 3 × 45 ms 门限 → 约 135~150 ms），
-即每路约 6.7 Hz 更新率**，32 路一起刷新。
+即每路约 6.7 Hz 更新率**，8 路一起刷新。
 
 ---
 
@@ -183,12 +184,12 @@ SET(TS=0, MUX=A) + START        <-- 同时开始下一轮的 A 通道
 
 | 中断 | 优先级（NVIC_PRIORITYGROUP_4） | ISR 里做什么 |
 |---|---|---|
-| EXTI0 (PA0, 合并 DRDY) | 1（更高） | **只置标志位 + 计数**，绝不碰 SPI |
 | USART1 | 2 | `HAL_UART_IRQHandler` → 逐字节喂协议状态机；发送完成续传 |
 
-* EXTI0 优先级高于 USART1：DRDY 边沿比较短（7.8 µs 高脉冲），不能被串口 ISR 挡住。
-* 一次 16 片批量读 48 字节 ≈ 200 µs，绝对不能放在 ISR 里 —— 会拖长中断、
-  挤掉串口接收。所有 SPI 都在主循环完成。
+* DRDY 已改为主循环**轮询**（PA0~PA3 逐片查电平），没有 EXTI 中断，
+  因此也不需要给它配优先级；7.8 µs 的高脉冲足够被 72 MHz 主循环捕到。
+* 一次 4 片批量读 12 字节 ≈ 30~50 µs，仍然**不放进 ISR** —— 所有 SPI 都在主循环完成，
+  串口 ISR 保持最短路径。
 * `SPI_Driver_DrdyTakeFlag()` 用 PRIMASK 保存/恢复做临界区，
   不会把"本来已关中断"的上下文提前开中断。
 
@@ -198,10 +199,10 @@ SET(TS=0, MUX=A) + START        <-- 同时开始下一轮的 A 通道
 
 手册 9.1.5 / 8.3.12 的做法：
 
-1. 16 片都写 `CONFIG0.MUX = 1110b`（AINP/AINN 内部短接到 (AVDD+AVSS)/2）。
+1. 全部片都写 `CONFIG0.MUX = 1110b`（AINP/AINN 内部短接到 (AVDD+AVSS)/2）。
    注意 **`TS=1` 时 CONFIG0 完全无效**，所以必须先 `TS=0`。
 2. 每片发 `START/SYNC`，等一个转换周期，读 24 位码值。
-3. 重复 `TC_OFFSET_CAL_SAMPLES`（默认 4）次取平均，存进 MCU 的 `s_offset[16]`。
+3. 重复 `TC_OFFSET_CAL_SAMPLES`（默认 4）次取平均，存进 MCU 的 `s_offset[ADS1220_CHIP_COUNT]`。
 4. 恢复原 `CONFIG0`/`CONFIG1` 并重新 `START/SYNC`。
 
 之后每次读数：`V_TC = (code - offset[chip]) × 1 LSB`。
@@ -275,7 +276,7 @@ ADS1220 24bit code
 > 固件在 `Core/Inc/ads1220.h` 的文件头、以及 `ads1220.c: ADS1220_BuildRegs()`
 > 里都写了这份对照表，避免以后维护时再踩。
 
-**上电后 16 片统一写入的 4 个字节（默认配置）：**
+**上电后全部片统一写入的 4 个字节（默认配置）：**
 
 ```
 WREG 0x43 (从 0x00 起写 4 个) →

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-32 路热电偶测温系统 —— 上位机通信协议层 (纯逻辑, 不依赖 GUI / 串口)
+N×ADS1220 热电偶测温系统 (本板 4 片 / 8 路) —— 上位机通信协议层 (纯逻辑, 不依赖 GUI / 串口)
 
 本文件是固件 Core/Inc/uart_protocol.h + Core/Src/uart_protocol.c 的 Python 对偶实现,
 两边共用同一套 CRC / 组帧 / 拆帧规则, 可以直接互相验证。
@@ -48,14 +48,14 @@ from typing import Dict, Iterator, List, Optional, Tuple
 HEAD_DOWN = 0xAA                      # PC -> MCU 帧头
 HEAD_UP = 0x55                        # MCU -> PC 帧头
 
-CMD_UP_TEMP = 0x10                    # 上行: 32 路温度
+CMD_UP_TEMP = 0x10                    # 上行: 温度帧 (固定 32 槽, 本板用前 8 槽)
 CMD_UP_STATUS = 0x11                  # 上行: 状态
 CMD_DOWN_SET_RATE = 0x01              # 下行: 设置采样率
 CMD_DOWN_RUN = 0x02                   # 下行: 启动/停止采集
 CMD_DOWN_SINGLE = 0x03                # 下行: 读取单次温度
 
-CHANNEL_COUNT = 32                    # 总测温通道数
-CHIP_COUNT = 16                       # 16 x ADS1220, 每片 2 路差分
+CHANNEL_COUNT = 32                    # 协议温度槽位数 (固定 32, 与板子实际通道数无关)
+CHIP_COUNT = 16                       # 协议芯片位图宽度 (16 bit, 最大支持 16 片); 本板实际 4 片
 STATUS_DATA_LEN = 24                  # 状态帧 DATA 长度
 TEMP_DATA_LEN = CHANNEL_COUNT * 4     # 温度帧 DATA 长度 = 128
 MAX_DATA_LEN = 200                    # 固件限制的 DATA 上限

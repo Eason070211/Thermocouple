@@ -21,7 +21,7 @@
  * 私有状态
  *============================================================================*/
 
-/** 当前 16 片共用的配置镜像。SetMuxAll / SetTempSensorAll 需要它来重建寄存器字节,
+/** 当前全部片共用的配置镜像。SetMuxAll / SetTempSensorAll 需要它来重建寄存器字节,
  *  避免调用者自己拼位域时把别的字段写坏。 */
 static ADS1220_Config_t s_cfg;
 static uint8_t          s_cfg_valid = 0u;
@@ -343,7 +343,7 @@ ADS1220_Status_t ADS1220_ReadDataByCmd(uint8_t chip, int32_t *code, uint8_t raw[
 }
 
 /*==============================================================================
- * 16 片批量操作
+ * 批量操作
  *============================================================================*/
 ADS1220_Status_t ADS1220_ResetAll(void)
 {
@@ -606,7 +606,7 @@ ADS1220_Status_t ADS1220_PowerUpInit(const ADS1220_Config_t *cfg, uint16_t *ok_m
   SPI_Driver_ReleaseAllCs();
   SPI_Driver_DelayMs(ADS1220_T_POWERUP_MS);
 
-  /* 2) 16 片逐个 RESET (0x06) */
+  /* 2) 逐片 RESET (0x06) */
   st = ADS1220_ResetAll();
   if (st != SPI_DRV_OK)
   {

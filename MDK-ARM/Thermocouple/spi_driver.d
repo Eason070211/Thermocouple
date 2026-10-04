@@ -1,5 +1,6 @@
-thermocouple/spi.o: ..\Core\Src\spi.c ..\Core\Inc\spi.h \
-  ..\Core\Inc\main.h ..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal.h \
+thermocouple/spi_driver.o: ..\Core\Src\spi_driver.c \
+  ..\Core\Inc\spi_driver.h ..\Core\Inc\main.h \
+  ..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal.h \
   ..\Core\Inc\stm32f1xx_hal_conf.h \
   ..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_rcc.h \
   ..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_def.h \
@@ -20,4 +21,4 @@ thermocouple/spi.o: ..\Core\Src\spi.c ..\Core\Inc\spi.h \
   ..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_pwr.h \
   ..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_spi.h \
   ..\Drivers\STM32F1xx_HAL_Driver\Inc\stm32f1xx_hal_uart.h \
-  ..\Core\Inc\board_config.h
+  ..\Core\Inc\board_config.h ..\Core\Inc\spi.h

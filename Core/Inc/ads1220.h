@@ -290,14 +290,14 @@ ADS1220_Status_t ADS1220_ReadData(uint8_t chip, int32_t *code, uint8_t raw[3]);
 /** 用 RDATA 指令读一次 (任何时候都能读, 不依赖 DRDY; 调试/单次用)。 */
 ADS1220_Status_t ADS1220_ReadDataByCmd(uint8_t chip, int32_t *code, uint8_t raw[3]);
 
-/** 把一份完整配置写进 16 片 (WREG 0x43 + 4 字节), 并记录为当前配置镜像。 */
+/** 把一份完整配置写进全部 ADS1220_CHIP_COUNT 片 (WREG 0x43 + 4 字节), 并记录为当前配置镜像。 */
 ADS1220_Status_t ADS1220_SetConfigAll(const ADS1220_Config_t *cfg);
 
 /** 取回当前生效的配置镜像 (未初始化时返回默认配置)。
  *  典型用法: Get -> 改 dr/reject -> SetConfigAll。 */
 void ADS1220_GetConfig(ADS1220_Config_t *cfg);
 
-/*---- 16 片批量操作 (广播: 每片单独一次 CS, 其余 CS 保持高) ----*/
+/*---- 批量操作 (逐片: 每片单独一次 CS, 其余 CS 保持高) ----*/
 ADS1220_Status_t ADS1220_ResetAll(void);
 ADS1220_Status_t ADS1220_WriteRegAll(uint8_t addr, uint8_t val);
 ADS1220_Status_t ADS1220_WriteRegsAll(uint8_t start, const uint8_t *vals, uint8_t cnt);
@@ -323,9 +323,9 @@ ADS1220_Status_t ADS1220_VerifyAll(const uint8_t written[ADS1220_REG_COUNT],
 ADS1220_Status_t ADS1220_PowerUpInit(const ADS1220_Config_t *cfg, uint16_t *ok_mask);
 
 /** 内部短路失调校准 (手册 9.1.5 / 8.3.12):
- *    把 16 片 MUX 置 1110b(输入短接到 (AVDD+AVSS)/2) -> 采样 samples 次求平均
+ *    把全部片 MUX 置 1110b(输入短接到 (AVDD+AVSS)/2) -> 采样 samples 次求平均
  *    -> 存下每次读数的平均码值 -> 恢复 MUX。
- *  @param offset_code  输出 16 片的平均失调码值 (后续读数减去它)
+ *  @param offset_code  输出全部片的平均失调码值 (后续读数减去它)
  *  @param samples      平均次数 (>=1)
  *  @note  本函数是**阻塞**的, 耗时约 samples x 转换周期 + 若干 ms, 只在上电时调用。
  *  @note  该失调是在"当前 GAIN/PGA_BYPASS 设置"下测得的, 改增益后需要重做。 */
