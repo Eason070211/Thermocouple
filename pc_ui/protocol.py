@@ -35,6 +35,9 @@ STM32 -> 上位机 (上行上报):
   0x01 设置采样率: LEN=2 -> DATA = [DR索引(0..6), 抑制索引(0..3)]
   0x02 启动/停止:  DATA = [0 停止 / 1 启动]
   0x03 单次读取:   DATA 省略 或 [通道号 0..31 / 0xFF=全部]
+  0x04 ★设置软件平均次数: DATA = [N], N = 1..64。
+       固件对每个通道连续读 N 次求算术平均再上报, 把随机噪声压到 1/sqrt(N)。
+       应答为状态帧, 其中 byte24 = 生效后的平均次数。
 
 自检:
     python -m pc_ui.protocol
@@ -60,10 +63,17 @@ CMD_UP_RAW = 0x12                     # 上行: 原始帧 (热电势 µV + 冷�
 CMD_DOWN_SET_RATE = 0x01              # 下行: 设置采样率
 CMD_DOWN_RUN = 0x02                   # 下行: 启动/停止采集
 CMD_DOWN_SINGLE = 0x03                # 下行: 读取单次温度
+CMD_DOWN_SET_AVG = 0x04               # 下行: 设置每通道软件平均次数 (1..64)
 
 CHANNEL_COUNT = 32                    # 协议温度槽位数 (固定 32, 与板子实际通道数无关)
 CHIP_COUNT = 16                       # 协议芯片位图宽度 (16 bit, 最大支持 16 片); 本板实际 4 片
-STATUS_DATA_LEN = 24                  # 状态帧 DATA 长度
+STATUS_DATA_LEN = 24                  # 状态帧 DATA 的最小长度 (老格式, 不含平均次数)
+STATUS_AVG_OFFSET = 24                # ★ 状态帧扩展字节: 当前软件平均次数 (老固件无此字节)
+STATUS_DATA_LEN_EXT = 25              # 新固件的状态帧长度 = 24 + 1
+
+#: ★ 软件平均次数的合法范围 (与固件 board_config.h 的 TC_AVG_MAX_CONVERSIONS 一致)
+AVG_MIN = 1
+AVG_MAX = 64
 TEMP_DATA_LEN = CHANNEL_COUNT * 4     # 温度帧 DATA 长度 = 128
 MAX_DATA_LEN = 200                    # 固件限制的 DATA 上限
 CH_SINGLE_ALL = 0xFF                  # CMD=0x03 时表示"全部通道"
@@ -408,6 +418,8 @@ def parse_status(payload: bytes) -> Dict:
         "spi_err": d[17] | (d[18] << 8),
         "open_cnt": d[19] | (d[20] << 8),
         "timeout_cnt": d[22] | (d[23] << 8),
+        # ★ 扩展字节: 当前生效的软件平均次数。老固件 (LEN=24) 没有这一字节, 返回 None。
+        "avg": d[STATUS_AVG_OFFSET] if len(d) > STATUS_AVG_OFFSET else None,
         "flags": flags,
         "flag_text": ",".join(flag_list) if flag_list else "正常",
         "raw": bytes(payload),
@@ -455,6 +467,20 @@ def cmd_single(channel: int = CH_SINGLE_ALL) -> bytes:
     return build_frame(CMD_DOWN_SINGLE, bytes((channel,)))
 
 
+def cmd_set_avg(n: int) -> bytes:
+    """CMD=0x04 设置每通道软件平均次数 (1..64)。
+
+    固件对每个通道连续读 N 次求算术平均再上报, 把随机噪声(白噪声)压到
+    1/sqrt(N)。N=1 表示不平均。代价是每通道耗时 x N。
+
+    :param n: 平均次数 1..64 (超出范围抛 ValueError)
+    """
+    n = int(n)
+    if not AVG_MIN <= n <= AVG_MAX:
+        raise ValueError("平均次数必须在 %d..%d 之间" % (AVG_MIN, AVG_MAX))
+    return build_frame(CMD_DOWN_SET_AVG, bytes((n,)))
+
+
 # ---------------------------------------------------------------------------
 # 采样率 -> 波特率建议 (来自 docs/TIMING.md: 高速采样率必须用 460800)
 # ---------------------------------------------------------------------------
@@ -500,6 +526,7 @@ def selftest(verbose: bool = True) -> bool:
         ("stop", cmd_run(False), CMD_DOWN_RUN),
         ("single 全部", cmd_single(), CMD_DOWN_SINGLE),
         ("single ch5", cmd_single(5), CMD_DOWN_SINGLE),
+        ("set_avg N=4", cmd_set_avg(4), CMD_DOWN_SET_AVG),
     ):
         got = list(FrameParser(HEAD_DOWN).feed(frame))
         check("%-24s -> %s" % (name, got), len(got) == 1 and got[0][0] == want_cmd)
@@ -580,10 +607,19 @@ def selftest(verbose: bool = True) -> bool:
     old = parse_status(bytes(payload))
     check("老固件回退: 按位图推断出 32 槽", old["active_channels"] == TEMP_SLOT_COUNT)
 
+    # ★ 扩展字节: 新固件状态帧 LEN=25, byte24 = 当前软件平均次数
+    payload25 = bytearray(STATUS_DATA_LEN_EXT)
+    payload25[:STATUS_DATA_LEN] = payload[:STATUS_DATA_LEN]
+    payload25[STATUS_AVG_OFFSET] = 8
+    st25 = parse_status(bytes(payload25))
+    check("新固件状态帧 avg == 8", st25["avg"] == 8)
+    check("老固件状态帧 avg 为 None", st["avg"] is None)
+
     if verbose:
         print("6) 参数校验")
     for bad_call in (lambda: cmd_single(32), lambda: cmd_set_rate(7, 0),
-                     lambda: cmd_set_rate(0, 4), lambda: dr_index_for_sps(123)):
+                     lambda: cmd_set_rate(0, 4), lambda: dr_index_for_sps(123),
+                     lambda: cmd_set_avg(0), lambda: cmd_set_avg(65)):
         try:
             bad_call()
             check("非法参数应抛异常", False)

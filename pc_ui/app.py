@@ -51,9 +51,10 @@ matplotlib.rcParams["path.simplify"] = True                       # 32 路曲线
 matplotlib.rcParams["path.simplify_threshold"] = 0.6
 
 try:                                  # 允许 "python pc_ui/main.py" 直接跑
-    from .protocol import (CHANNEL_COUNT, REJECT_TABLE, SAMPLE_RATE_CHOICES,
-                           ST_FLAG_RAW_UPLINK, baudrate_advice, cj_per_channel,
-                           cmd_run, cmd_set_rate_sps, cmd_single)
+    from .protocol import (AVG_MAX, AVG_MIN, CHANNEL_COUNT, REJECT_TABLE,
+                           SAMPLE_RATE_CHOICES, ST_FLAG_RAW_UPLINK, baudrate_advice,
+                           cj_per_channel, cmd_run, cmd_set_avg, cmd_set_rate_sps,
+                           cmd_single)
     from .recorder import DataRecorder
     from .serial_reader import SERIAL_AVAILABLE, SerialReader, available_ports
     from .logger import FileLogger
@@ -61,9 +62,10 @@ try:                                  # 允许 "python pc_ui/main.py" 直接跑
     from .tc_table import DEFAULT_TYPE, MODE_PCHIP, TCTableSet, default_table_dir
     from .widgets import (ChannelGrid, ChannelSelector, RingBuffer, StatusLamp)
 except ImportError:                   # pragma: no cover
-    from protocol import (CHANNEL_COUNT, REJECT_TABLE, SAMPLE_RATE_CHOICES,
-                          ST_FLAG_RAW_UPLINK, baudrate_advice, cj_per_channel,
-                          cmd_run, cmd_set_rate_sps, cmd_single)
+    from protocol import (AVG_MAX, AVG_MIN, CHANNEL_COUNT, REJECT_TABLE,
+                          SAMPLE_RATE_CHOICES, ST_FLAG_RAW_UPLINK, baudrate_advice,
+                          cj_per_channel, cmd_run, cmd_set_avg, cmd_set_rate_sps,
+                          cmd_single)
     from recorder import DataRecorder
     from serial_reader import SERIAL_AVAILABLE, SerialReader, available_ports
     from logger import FileLogger
@@ -147,6 +149,9 @@ class TemperatureApp:
         self._values_dirty = True
         self._closing = False
         self._timeout_warned = False
+        #: ★ 最近若干帧温度, 用于估算每通道的短期标准差 (噪声 σ), 给"哪路噪声大"用
+        self._noise_window: "collections.deque[np.ndarray]" = collections.deque(maxlen=32)
+        self.noise_sigma = np.full(CHANNEL_COUNT, np.nan, dtype=float)
         self.log_lines: "collections.deque[str]" = collections.deque(maxlen=800)
         self.log_window: Optional[tk.Toplevel] = None
         # 文件日志: logs/ 目录 + 时间戳文件名, 每条带完整时间戳
@@ -171,6 +176,7 @@ class TemperatureApp:
         self.baud_var = tk.StringVar(value=str(self.initial_baud))
         self.rate_var = tk.StringVar(value="%d SPS" % SAMPLE_RATE_CHOICES[0])
         self.reject_var = tk.StringVar(value=REJECT_TABLE[0])
+        self.avg_var = tk.IntVar(value=1)          # ★ 软件平均次数 (CMD=0x04)
         self.dir_var = tk.StringVar(value=os.path.abspath(self.initial_record_dir))
         self.retention_var = tk.IntVar(value=self.initial_retention)
         self.over_temp_var = tk.DoubleVar(value=self.initial_over_temp)
@@ -296,6 +302,21 @@ class TemperatureApp:
                    ).grid(row=0, column=1, sticky="ew", padx=4, pady=2)
         ttk.Button(box, text="单次读取全部通道", command=self.single_read
                    ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=4, pady=2)
+
+        # ★ 软件平均次数 (CMD=0x04): 每通道连续读 N 次求算术平均, 噪声降到 1/sqrt(N)
+        avg_row = ttk.Frame(box)
+        avg_row.grid(row=2, column=0, columnspan=2, sticky="ew", padx=4, pady=(4, 4))
+        avg_row.columnconfigure(2, weight=1)
+        ttk.Label(avg_row, text="软件平均").grid(row=0, column=0, sticky="w")
+        self.avg_spin = ttk.Spinbox(avg_row, from_=AVG_MIN, to=AVG_MAX, increment=1,
+                                    textvariable=self.avg_var, width=5,
+                                    command=self.apply_average)
+        self.avg_spin.grid(row=0, column=1, sticky="w", padx=(4, 4))
+        ttk.Button(avg_row, text="应用", width=6,
+                   command=self.apply_average).grid(row=0, column=2, sticky="w")
+        ttk.Label(box, text="次 (1=不平均; 噪声≈1/√N, 耗时×N)",
+                  font=("Microsoft YaHei", 8), foreground="#666666"
+                  ).grid(row=3, column=0, columnspan=2, sticky="w", padx=4, pady=(0, 2))
 
         # ---------- 3. 数据记录 ----------
         box = ttk.LabelFrame(parent, text=" 数据记录 (CSV) ", style="Section.TLabelframe")
@@ -445,7 +466,8 @@ class TemperatureApp:
                 ("tctable", "分度表"),
                 ("rounds", "测量轮次"), ("uptime", "运行时间"), ("chip_ok", "芯片 OK 位图"),
                 ("chip_err", "芯片 ERR 位图"), ("open", "断线累计"), ("spi", "SPI 失败"),
-                ("timeout", "DRDY 超时"), ("flags", "异常标志"), ("age", "状态帧龄期"))
+                ("timeout", "DRDY 超时"), ("avg", "软件平均"),
+                ("flags", "异常标志"), ("age", "状态帧龄期"))
         for row, (key, text) in enumerate(rows):
             ttk.Label(status_box, text=text).grid(row=row, column=0, sticky="w", padx=4)
             var = tk.StringVar(value="-")
@@ -535,6 +557,8 @@ class TemperatureApp:
         self.unknown_frames = 0
         self.last_temp_time = 0.0
         self._frame_times.clear()
+        self._noise_window.clear()
+        self.noise_sigma = np.full(CHANNEL_COUNT, np.nan, dtype=float)
         self._timeout_warned = False
         self.grid_view.reset()
         self._plot_dirty = True
@@ -566,6 +590,7 @@ class TemperatureApp:
         if self.reader is None:
             return
         self.apply_rate(from_user=False)
+        self.apply_average(from_user=False)
         self.acquire(True, from_user=False)
 
     def disconnect(self) -> None:
@@ -615,6 +640,26 @@ class TemperatureApp:
             self._send_frame(frame, "设置采样率 %d SPS / %s" % (sps, self.reject_var.get()))
         elif from_user:
             self._log("采样率已选择 %d SPS (连接后自动下发)" % sps)
+
+    def apply_average(self, from_user: bool = True) -> None:
+        """把界面上的软件平均次数下发 (CMD=0x04)。
+
+        固件对每个通道连续读 N 次求算术平均再上报, 把随机噪声(白噪声)压到
+        1/sqrt(N) (N=4 约减半, N=16 约 1/4)。代价是每通道耗时 x N。
+        这是"不动硬件就把数据变稳"的开关。
+        """
+        try:
+            n = int(self.avg_var.get())
+        except (tk.TclError, ValueError):
+            return
+        n = max(AVG_MIN, min(n, AVG_MAX))
+        self.avg_var.set(n)
+        if self.reader is not None:
+            self._send_frame(cmd_set_avg(n), "设置软件平均次数 N=%d" % n)
+            self._log("软件平均 %d 次: 噪声约降为 1/√%d, 每通道耗时约 x%d"
+                      % (n, n, n))
+        elif from_user:
+            self._log("软件平均次数已设为 %d 次 (连接后自动下发)" % n)
 
     def acquire(self, start: bool, from_user: bool = True) -> None:
         """启动/停止下位机采集 (CMD=0x02)。"""
@@ -727,6 +772,7 @@ class TemperatureApp:
 
     def clear_plot(self) -> None:
         self.ring.clear()
+        self._noise_window.clear()
         self.t0 = None
         for line in self.lines:
             line.set_data([], [])
@@ -821,6 +867,8 @@ class TemperatureApp:
         self._frame_times.append(now)
         self._values_dirty = True
         self._timeout_warned = False
+        # ★ 留一份给噪声估计 (σ); 只保留最近 32 帧, 反映"当前"的抖动
+        self._noise_window.append(np.asarray(values, dtype=float))
 
         # CMD=0x03 的单次读取: 只更新数值面板, 不进曲线也不记录 (避免把曲线打断)
         if self._single_pending and (now - self._single_pending) < 2.0:
@@ -960,8 +1008,20 @@ class TemperatureApp:
                       "error")
 
     def _update_values(self) -> None:
-        self.grid_view.update_values(self.latest)
+        self.noise_sigma = self._compute_noise_sigma()
+        self.grid_view.update_values(self.latest, self.noise_sigma)
         self._values_dirty = False
+
+    def _compute_noise_sigma(self) -> np.ndarray:
+        """最近若干帧温度里每通道的标准差 (噪声 σ), 用于"一眼看出哪路噪声大"。
+
+        样本不足 2 帧时返回全 NaN; 断线(NaN)的通道 nanstd 自然给出 NaN。
+        """
+        if len(self._noise_window) < 2:
+            return np.full(CHANNEL_COUNT, np.nan, dtype=float)
+        block = np.vstack(self._noise_window)          # (n, CHANNEL_COUNT)
+        with np.errstate(invalid="ignore"):
+            return np.nanstd(block, axis=0)
 
     def _update_plot(self) -> None:
         if self.ring.count == 0:
@@ -1025,6 +1085,8 @@ class TemperatureApp:
         self.stat_vars["open"].set(str(status.get("open_cnt", "-")))
         self.stat_vars["spi"].set(str(status.get("spi_err", "-")))
         self.stat_vars["timeout"].set(str(status.get("timeout_cnt", "-")))
+        avg = status.get("avg")
+        self.stat_vars["avg"].set(("%d 次" % avg) if avg else "-")
         self.stat_vars["flags"].set(str(status.get("flag_text", "-")))
         age = "%0.1f s" % (now - self.last_status_time) if self.last_status_time else "-"
         self.stat_vars["age"].set(age)

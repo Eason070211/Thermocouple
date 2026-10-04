@@ -306,6 +306,8 @@ uint8_t UART_Protocol_SendStatusFrame(const UART_Status_t *st)
 
   d[UART_ST_FLAGS]     = st->flags;
   UART_PutU16LE(&d[UART_ST_TIMEOUT_LO], st->phase_timeout_count);
+  /* ★ 扩展字节: 当前生效的软件平均次数 (1..64)。老上位机只读前 24 字节, 忽略它。 */
+  d[UART_ST_AVG]       = st->avg_n;
 
   return UART_Protocol_SendFrame(UART_CMD_UP_STATUS, d, UART_STATUS_DATA_LEN);
 }
@@ -438,6 +440,7 @@ static void UART_DispatchFrame(void)
   msg.dr_bits = 0u;
   msg.reject  = 0u;
   msg.channel = UART_CH_SINGLE_ALL;
+  msg.avg_n   = 0u;
 
   switch (cmd)
   {
@@ -461,6 +464,17 @@ static void UART_DispatchFrame(void)
       msg.ev      = UART_EV_SINGLE;
       msg.channel = (len >= 1u) ? d[0] : UART_CH_SINGLE_ALL;
       UART_PushEvent(&msg);
+      break;
+
+    case UART_CMD_DOWN_SET_AVG:
+      /* ★ 设置软件平均次数: DATA[0] = N。范围由 main.c 的 App_SetAverage()
+       *   负责夹到 1..TC_AVG_MAX_CONVERSIONS, 这里只做"有没有数据"的判断。 */
+      if (len >= 1u)
+      {
+        msg.ev    = UART_EV_SET_AVG;
+        msg.avg_n = d[0];
+        UART_PushEvent(&msg);
+      }
       break;
 
     default:

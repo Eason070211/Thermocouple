@@ -101,6 +101,14 @@ class DataRecorder(threading.Thread):
         self._status_header_written = False
         self._last_error: Optional[str] = None
 
+        #: ★ 记录线程是**常驻**的 (整个进程只 start 一次)。
+        #:   停止记录只是把 _active 置 0 并让它把尾巴写盘, 线程本身不退出 ——
+        #:   否则第二次点"开始记录"再 start() 会抛
+        #:   RuntimeError: threads can only be started once。
+        #:   _idle: 线程把尾部数据写完后置位, stop_recording() 等它。
+        self._idle = threading.Event()
+        self._idle.set()
+
     # ------------------------------------------------------------------
     # 状态查询
     # ------------------------------------------------------------------
@@ -148,23 +156,24 @@ class DataRecorder(threading.Thread):
         self._last_error = None
         self._drain_queue()
 
+        self._idle.clear()          # ★ 新一次记录开始, 先标记"忙"
         with self._lock:
             self._active = True
+        # ★ 常驻线程: 只在第一次启动, 之后反复复用同一个线程对象
+        #   (Python 的 Thread 不能二次 start, 这正是"开始记录失败"的根因)
         if not self.is_alive():
             self.start()
-        else:
-            # 线程复用时用一个空标记唤醒它继续干活
-            self._in_queue.put(("wake", None, None))
         return self.temp_path
 
     def stop_recording(self, timeout: float = 5.0) -> Dict[str, Optional[str]]:
-        """停止记录, 落盘剩余数据并等待线程收尾。"""
+        """停止记录, 落盘剩余数据并等待收尾。"""
         with self._lock:
             was_active = self._active
             self._active = False
         if was_active and self.is_alive():
             self._in_queue.put((_SENTINEL_STOP, None, None))
-            self.join(timeout=timeout)
+            # ★ 等线程把剩余行写完 (回到空闲), 而不是等它退出 —— 线程要留着复用
+            self._idle.wait(timeout)
         return {"temp_path": self.temp_path, "status_path": self.status_path,
                 "rows": self.rows_written, "status_rows": self.status_rows_written,
                 "dropped": self.dropped, "error": self._last_error}
@@ -223,6 +232,8 @@ class DataRecorder(threading.Thread):
         status_rows: List[list] = []
         last_flush = time.time()
 
+        # ★ 常驻循环: 停止记录时只把尾部数据写完并置 _idle, 线程**不退出**,
+        #   这样同一个 DataRecorder 可以反复"开始 / 停止记录"。
         while True:
             timeout = max(0.01, self.flush_interval - (time.time() - last_flush))
             try:
@@ -232,7 +243,13 @@ class DataRecorder(threading.Thread):
                 t = payload = None
 
             if kind == _SENTINEL_STOP:
-                break
+                # 收到停止哨兵: 落盘剩余行, 回到空闲等下一次记录
+                self._flush_temp(temp_rows)
+                self._flush_status(status_rows)
+                temp_rows, status_rows = [], []
+                last_flush = time.time()
+                self._idle.set()
+                continue
 
             if kind == "temp":
                 temp_rows.append(self._make_temp_row(t, payload))
@@ -249,14 +266,11 @@ class DataRecorder(threading.Thread):
                 status_rows = []
 
             if not self.active and self._in_queue.empty():
-                # 停止记录后把尾巴写完再退出
+                # 没走哨兵就停了 (例如外部直接把 _active 置 0) 也要写完尾巴
                 self._flush_temp(temp_rows)
                 self._flush_status(status_rows)
                 temp_rows, status_rows = [], []
-                break
-
-        self._flush_temp(temp_rows)
-        self._flush_status(status_rows)
+                self._idle.set()
 
     # ------------------------------------------------------------------
     # 行构造 / 落盘

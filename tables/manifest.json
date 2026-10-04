@@ -1,7 +1,7 @@
 {
   "schema": "TC_TABLE v1",
   "default_type": "K",
-  "generated": "2026-10-04T10:30:01Z",
+  "generated": "2026-10-04T20:13:48Z",
   "types": {
     "K": {
       "file": "tc_type_k.csv",

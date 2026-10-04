@@ -26,18 +26,18 @@ from typing import Dict, Optional
 
 try:                                  # 允许 "python pc_ui/main.py" 直接跑
     from .protocol import (CHANNEL_COUNT, CHIP_COUNT, CMD_DOWN_RUN, CMD_DOWN_SET_RATE,
-                           CMD_DOWN_SINGLE, CMD_UP_RAW, CMD_UP_STATUS, CMD_UP_TEMP,
-                           DR_TABLE, HEAD_DOWN, HEAD_UP, REJECT_TABLE,
-                           ST_FLAG_RAW_UPLINK, STATUS_DATA_LEN, FrameParser,
-                           build_frame, build_raw_frame, build_temp_frame,
-                           parse_raw, parse_status, parse_temp)
+                            CMD_DOWN_SET_AVG, CMD_DOWN_SINGLE, CMD_UP_RAW, CMD_UP_STATUS,
+                            CMD_UP_TEMP, DR_TABLE, HEAD_DOWN, HEAD_UP, REJECT_TABLE,
+                            ST_FLAG_RAW_UPLINK, STATUS_AVG_OFFSET, STATUS_DATA_LEN_EXT,
+                            FrameParser, build_frame, build_raw_frame,
+                            build_temp_frame, parse_raw, parse_status, parse_temp)
 except ImportError:                   # pragma: no cover
     from protocol import (CHANNEL_COUNT, CHIP_COUNT, CMD_DOWN_RUN, CMD_DOWN_SET_RATE,
-                          CMD_DOWN_SINGLE, CMD_UP_RAW, CMD_UP_STATUS, CMD_UP_TEMP,
-                          DR_TABLE, HEAD_DOWN, HEAD_UP, REJECT_TABLE,
-                          ST_FLAG_RAW_UPLINK, STATUS_DATA_LEN, FrameParser,
-                          build_frame, build_raw_frame, build_temp_frame,
-                          parse_raw, parse_status, parse_temp)
+                          CMD_DOWN_SET_AVG, CMD_DOWN_SINGLE, CMD_UP_RAW, CMD_UP_STATUS,
+                          CMD_UP_TEMP, DR_TABLE, HEAD_DOWN, HEAD_UP, REJECT_TABLE,
+                          ST_FLAG_RAW_UPLINK, STATUS_AVG_OFFSET, STATUS_DATA_LEN_EXT,
+                          FrameParser, build_frame, build_raw_frame,
+                          build_temp_frame, parse_raw, parse_status, parse_temp)
 
 
 class DemoSource(threading.Thread):
@@ -64,6 +64,7 @@ class DemoSource(threading.Thread):
 
         self.dr_index = 0                 # 20 SPS
         self.reject_index = 0
+        self.avg_n = 1                    # ★ 软件平均次数 (CMD=0x04 可改)
         self.running = True
         self.rounds = 0
         self.open_count = 0
@@ -129,6 +130,10 @@ class DemoSource(threading.Thread):
         elif cmd == CMD_DOWN_SINGLE:
             channel = payload[0] if payload else 0xFF
             self._publish_temp(single_channel=None if channel == 0xFF else channel)
+        elif cmd == CMD_DOWN_SET_AVG and len(payload) >= 1:
+            # ★ 与固件一致: 夹到 1..64, 回一帧状态确认
+            self.avg_n = max(1, min(int(payload[0]), 64))
+            self._emit(type="status", status=self._status_dict())
 
     def _status_dict(self) -> Dict:
         chip_ok = 0
@@ -140,7 +145,7 @@ class DemoSource(threading.Thread):
                 chip_err |= 1 << chip
             else:
                 chip_ok |= 1 << chip
-        payload = bytearray(STATUS_DATA_LEN)
+        payload = bytearray(STATUS_DATA_LEN_EXT)
         payload[0] = 1 if self.running else 0
         payload[1] = (self.dr_index << 5) & 0xE0
         # ★ byte2: 高 4 位抑制 + 低 4 位本板片数 (与固件 uart_protocol.c 一致)
@@ -156,6 +161,7 @@ class DemoSource(threading.Thread):
         payload[19:21] = int(self.open_count & 0xFFFF).to_bytes(2, "little")
         payload[21] = ST_FLAG_RAW_UPLINK if self.raw_uplink else 0
         payload[22:24] = (0).to_bytes(2, "little")
+        payload[STATUS_AVG_OFFSET] = self.avg_n & 0xFF     # ★ 扩展字节: 平均次数
         return parse_status(bytes(payload))
 
     def _sample_channels(self) -> list:

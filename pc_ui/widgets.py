@@ -175,8 +175,10 @@ class ChannelGrid(ttk.Frame):
         self.active = channels
         self._temp_labels: List[tk.Label] = []
         self._state_labels: List[tk.Label] = []
+        self._sigma_labels: List[tk.Label] = []
         self._cells: List[tk.Frame] = []
         self._cache: List[Tuple[str, str]] = [("", "")] * channels
+        self._sigma_cache: List[str] = [""] * channels
 
         for ch in range(channels):
             row, col = divmod(ch, columns)
@@ -196,10 +198,15 @@ class ChannelGrid(ttk.Frame):
                              width=4, anchor="e")
             state.grid(row=1, column=2, sticky="e")
             cell.columnconfigure(2, weight=1)
+            # ★ 噪声 σ: 最近若干帧的标准差, 用来一眼看出哪一路抖得厉害
+            sigma = tk.Label(cell, text="σ ---", font=("Consolas", 7),
+                             fg="#888888", anchor="w")
+            sigma.grid(row=2, column=0, columnspan=3, sticky="w")
 
             self._cells.append(cell)
             self._temp_labels.append(temp)
             self._state_labels.append(state)
+            self._sigma_labels.append(sigma)
 
     # ------------------------------------------------------------------
     def set_active_channels(self, count: int) -> None:
@@ -231,20 +238,37 @@ class ChannelGrid(ttk.Frame):
             return STATE_OVER
         return STATE_NORMAL
 
-    def update_values(self, values: Sequence[float]) -> None:
-        """刷新 32 路显示; ``values`` 里 NaN 表示断线。"""
+    def update_values(self, values: Sequence[float],
+                      sigmas: Optional[Sequence[float]] = None) -> None:
+        """刷新 32 路显示; ``values`` 里 NaN 表示断线。
+
+        :param sigmas: 可选的每通道噪声标准差 (σ, °C)。给了就在每格下面显示
+                       "σ x.xx", 抖动大的通道标红; None 时显示 "σ ---"。
+        """
         for ch in range(self.channels):
             value = float(values[ch]) if ch < len(values) else float("nan")
             state = self.classify(value)
             temp_text = "---.--" if math.isnan(value) else "%7.2f" % value
-            if (temp_text, state) == self._cache[ch]:
-                continue
-            self._cache[ch] = (temp_text, state)
-            color = STATE_COLORS[state]
-            self._temp_labels[ch].configure(text=temp_text, fg=color)
-            self._state_labels[ch].configure(text=state, fg=color)
+            if (temp_text, state) != self._cache[ch]:
+                self._cache[ch] = (temp_text, state)
+                color = STATE_COLORS[state]
+                self._temp_labels[ch].configure(text=temp_text, fg=color)
+                self._state_labels[ch].configure(text=state, fg=color)
+
+            # ★ 噪声 σ (只在文本变化时 configure, 避免每 100ms 无谓重绘)
+            sigma = None
+            if sigmas is not None and ch < len(sigmas):
+                s = float(sigmas[ch])
+                sigma = s if math.isfinite(s) else None
+            sigma_text = "σ ---" if sigma is None else "σ %.2f" % sigma
+            if sigma_text != self._sigma_cache[ch]:
+                self._sigma_cache[ch] = sigma_text
+                noisy = sigma is not None and sigma > 1.0
+                self._sigma_labels[ch].configure(
+                    text=sigma_text, fg="#c62828" if noisy else "#888888")
 
     def reset(self) -> None:
+        self._sigma_cache = [""] * self.channels
         self.update_values([float("nan")] * self.channels)
 
 

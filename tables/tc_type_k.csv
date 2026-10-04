@@ -13,7 +13,7 @@
 # standard   = ITS-90 (NIST SRD 60) / IEC 60584-1 / ASTM E230 / GB/T 16839
 # source     = NIST SRD 60 type_k.tab.txt (https://its90.nist.gov/downloadFiles/type_k.tab.txt)
 # max_dev_vs_reference_uV = 0.499
-# created    = 2026-10-04T10:30:01Z
+# created    = 2026-10-04T20:13:48Z
 # sha256     = 678e97203fd1fb16d00bbb6521375269c8aee0134df4c7388dbf24c4c65a0f3a
 temp_C,emf_uV
 -270,-6458.0

@@ -61,8 +61,9 @@
   *    既不会每轮超时, 也不会把采集拖慢 —— 这是分步贴装能直接跑通的关键。
   *
   *  一个完整轮次 = A 通道 -> 切 MUX -> B 通道 -> 切 TS -> 冷端 -> 恢复 + 上报,
-  *  每个阶段各占 1 个转换周期 (20SPS 下 50ms), 因此 20SPS 时约 150ms/轮。
-  */
+ *  每个阶段各占 s_avg_n 个转换周期 (20SPS 下一次 50ms), 因此 20SPS + 不平均
+ *  时约 150ms/轮; 若把平均次数设为 N, 则每轮约 3 x N x 50ms。
+ */
 typedef enum
 {
   APP_ST_STOPPED = 0,   /**< 已停止 (所有片处于 POWERDOWN) */
@@ -103,6 +104,10 @@ static uint8_t  s_errA[ADS1220_CHIP_COUNT];                     /**< 0 = SPI 成
 static uint8_t  s_errB[ADS1220_CHIP_COUNT];
 static uint8_t  s_errT[ADS1220_CHIP_COUNT];
 
+static int32_t  s_accA[ADS1220_CHIP_COUNT];                     /**< A 通道累加器 (软件平均) */
+static int32_t  s_accB[ADS1220_CHIP_COUNT];                     /**< B 通道累加器 */
+static int32_t  s_accT[ADS1220_CHIP_COUNT];                     /**< 冷端温度累加器 */
+
 #if (TC_UPLINK_MODE != 1)
 /** 本板实际通道的最终温度 (长度 = 片数 x 2)。
  *  ★ 只在"固件算温度"模式 (0/2) 下需要 —— 默认模式 1 由上位机算, 这里不占空间。 */
@@ -130,6 +135,8 @@ static uint8_t   s_single_mode;                                 /**< 1 = 本次�
 static uint8_t   s_single_ch;                                   /**< 单次请求的通道号 */
 static uint8_t   s_hold_a;                                      /**< MUX 保持计数 (CH_A) */
 static uint8_t   s_hold_b;                                      /**< MUX 保持计数 (CH_B) */
+static uint8_t   s_hold_t;                                      /**< MUX 保持计数 (冷端) */
+static uint8_t   s_avg_n;                                       /**< ★软件平均次数 (1..TC_AVG_MAX_CONVERSIONS), CMD=0x04 可改 */
 
 static uint16_t  s_chip_ok_mask;                                /**< 上电回读校验通过的片 */
 static uint16_t  s_chip_err_mask;                               /**< 本轮 SPI 出错的片 */
@@ -158,6 +165,8 @@ void SystemClock_Config(void);
 static void    App_StartWait(void);
 static uint8_t App_WaitDone(void);
 static void    App_ReadAll(int32_t *dst, uint8_t *err);
+static void    App_ClearAvg(void);
+static void    App_SetAverage(uint8_t n);
 static void    App_ComputeTemps(void);
 static void    App_ReportTemps(void);
 static void    App_StatusFill(UART_Status_t *st);
@@ -270,6 +279,43 @@ static void App_ReadAll(int32_t *dst, uint8_t *err)
   {
     err[chip] = (uint8_t)ADS1220_ReadData(chip, &dst[chip], NULL);
   }
+}
+
+/** 清空三个阶段的软件平均累加器 (启动 / 单次读取 / 改平均次数时调用,
+ *  避免把上一轮的半截累加结果带进新一轮)。 */
+static void App_ClearAvg(void)
+{
+  uint8_t chip;
+
+  for (chip = 0u; chip < ADS1220_CHIP_COUNT; chip++)
+  {
+    s_accA[chip] = 0;
+    s_accB[chip] = 0;
+    s_accT[chip] = 0;
+  }
+}
+
+/** ★ 设置软件平均次数 (CMD=0x04)。
+ *
+ *  夹到 1..TC_AVG_MAX_CONVERSIONS (0 会被当成 1 = 不平均)。
+ *  运行中修改是安全的: 立刻清累加器和保持计数, 下一阶段的读取就用新次数,
+ *  不会把"新旧次数"的样本混在一起平均。 */
+static void App_SetAverage(uint8_t n)
+{
+  if (n < 1u)
+  {
+    n = 1u;
+  }
+  if (n > (uint8_t)TC_AVG_MAX_CONVERSIONS)
+  {
+    n = (uint8_t)TC_AVG_MAX_CONVERSIONS;
+  }
+
+  s_avg_n  = n;
+  s_hold_a = 0u;
+  s_hold_b = 0u;
+  s_hold_t = 0u;
+  App_ClearAvg();
 }
 
 /*==============================================================================
@@ -479,6 +525,7 @@ static void App_StatusFill(UART_Status_t *st)
   st->spi_err_count  = (uint16_t)(SPI_Driver_ErrorCount() & 0xFFFFu);
   st->open_tc_count  = s_open_cnt;
   st->phase_timeout_count = s_phase_timeout_cnt;
+  st->avg_n          = s_avg_n;   /* ★ 当前生效的软件平均次数 */
 
   st->flags = s_flags;
 #if (TC_UPLINK_MODE != 0)
@@ -522,6 +569,8 @@ static void App_Start(void)
   s_run         = 1u;
   s_hold_a      = 0u;
   s_hold_b      = 0u;
+  s_hold_t      = 0u;
+  App_ClearAvg();             /* 丢弃上一轮残留的半截平均累加 */
   s_chip_err_mask = 0u;
   s_drdy_missing_mask = 0u;   /* 每次启动都重新信任一次: 重新校验过就再等它 */
   s_state       = APP_ST_WAIT_A;
@@ -584,6 +633,8 @@ static void App_RequestSingle(uint8_t channel)
 
   s_hold_a        = 0u;
   s_hold_b        = 0u;
+  s_hold_t        = 0u;
+  App_ClearAvg();                 /* 单次读取也从干净的累加器开始 */
   s_chip_err_mask = 0u;
   s_state         = APP_ST_WAIT_A;
 
@@ -614,6 +665,12 @@ static void App_HandleEvent(const UART_EventMsg_t *msg)
 
     case UART_EV_SINGLE:
       App_RequestSingle(msg->channel);
+      break;
+
+    case UART_EV_SET_AVG:
+      /* ★ 运行中修改软件平均次数, 改完回一帧状态让上位机确认生效值 */
+      App_SetAverage(msg->avg_n);
+      App_ReportStatus();
       break;
 
     default:
@@ -680,6 +737,7 @@ static void App_Run(void)
     case APP_ST_WAIT_A:
     {
       uint8_t w = App_WaitDone();
+      uint8_t chip;
 
       if (w == 0u)
       {
@@ -692,12 +750,25 @@ static void App_Run(void)
 
       App_ReadAll(s_codeA, s_errA);
 
-      /* 需求中的 "每完成 N 次转换切换一次 MUX" */
-      s_hold_a++;
-      if (s_hold_a < TC_MUX_HOLD_CONVERSIONS)
+      /* ★ 软件平均: 把本次读数累加进 A 通道累加器。连续读 s_avg_n 次后取
+       *   算术平均再切 MUX, 把随机噪声(白噪声)压到 1/sqrt(N); N=1 即不平均。 */
+      for (chip = 0u; chip < ADS1220_CHIP_COUNT; chip++)
       {
-        App_StartWait();                        /* 继续读同一通道, 不切 MUX */
+        s_accA[chip] += s_codeA[chip];
+      }
+      s_hold_a++;
+
+      if (s_hold_a < s_avg_n)
+      {
+        App_StartWait();                        /* 继续读同一通道, 多累加几个样本 */
         break;
+      }
+
+      /* 达到平均次数: 求平均 (四舍五入) 并清累加器, 之后才切 MUX */
+      for (chip = 0u; chip < ADS1220_CHIP_COUNT; chip++)
+      {
+        s_codeA[chip] = (s_accA[chip] + ((int32_t)s_hold_a / 2)) / (int32_t)s_hold_a;
+        s_accA[chip] = 0;
       }
       s_hold_a = 0u;
 
@@ -715,6 +786,7 @@ static void App_Run(void)
     case APP_ST_WAIT_B:
     {
       uint8_t w = App_WaitDone();
+      uint8_t chip;
 
       if (w == 0u)
       {
@@ -727,11 +799,21 @@ static void App_Run(void)
 
       App_ReadAll(s_codeB, s_errB);
 
+      /* ★ 软件平均 (与 A 通道同一逻辑) */
+      for (chip = 0u; chip < ADS1220_CHIP_COUNT; chip++)
+      {
+        s_accB[chip] += s_codeB[chip];
+      }
       s_hold_b++;
-      if (s_hold_b < TC_MUX_HOLD_CONVERSIONS)
+      if (s_hold_b < s_avg_n)
       {
         App_StartWait();
         break;
+      }
+      for (chip = 0u; chip < ADS1220_CHIP_COUNT; chip++)
+      {
+        s_codeB[chip] = (s_accB[chip] + ((int32_t)s_hold_b / 2)) / (int32_t)s_hold_b;
+        s_accB[chip] = 0;
       }
       s_hold_b = 0u;
 
@@ -750,6 +832,7 @@ static void App_Run(void)
     case APP_ST_WAIT_T:
     {
       uint8_t w = App_WaitDone();
+      uint8_t chip;
 
       if (w == 0u)
       {
@@ -761,6 +844,25 @@ static void App_Run(void)
       }
 
       App_ReadAll(s_codeT, s_errT);
+
+      /* ★ 冷端也做同样的软件平均: 冷端是本片两路共用的基准, 它的噪声会变成
+       *   整片的公共误差, 平均收益和热电偶通道完全一样。 */
+      for (chip = 0u; chip < ADS1220_CHIP_COUNT; chip++)
+      {
+        s_accT[chip] += s_codeT[chip];
+      }
+      s_hold_t++;
+      if (s_hold_t < s_avg_n)
+      {
+        App_StartWait();
+        break;
+      }
+      for (chip = 0u; chip < ADS1220_CHIP_COUNT; chip++)
+      {
+        s_codeT[chip] = (s_accT[chip] + ((int32_t)s_hold_t / 2)) / (int32_t)s_hold_t;
+        s_accT[chip] = 0;
+      }
+      s_hold_t = 0u;
 
       /* 恢复: TS=0 + MUX 回 CH_A, 然后重新同步开始下一轮的 A 通道转换。
        * 这里先发 START 再上报, 让串口发送时间和 50ms 转换时间重叠。 */
@@ -825,6 +927,13 @@ static void App_HwInit(void)
 
   /* ---- 3) 默认寄存器配置 (对应需求里的 CONFIG0..CONFIG3) ---- */
   ADS1220_DefaultConfig(&s_cfg);
+
+  /* ---- 3b) ★软件平均次数上电默认值 (可由上位机 CMD=0x04 运行时修改) ---- */
+  s_avg_n  = (uint8_t)TC_MUX_HOLD_CONVERSIONS;
+  s_hold_a = 0u;
+  s_hold_b = 0u;
+  s_hold_t = 0u;
+  App_ClearAvg();
 
   /* ---- 4) 上电初始化:
    *        >=50ms 等待 -> 逐片 RESET(0x06) -> 1ms -> WREG 4 字节

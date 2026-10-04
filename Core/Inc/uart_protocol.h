@@ -26,7 +26,8 @@
   *                              ch[2n+1] = 第 n 片 AIN2/AIN3
   *                    无效通道填 NaN (0x7FC00000) —— 断线/通信失败/无数据。
   *
-  *    0x11 状态上报:  DATA = 24 字节, 见下方 UART_STATUS_DATA_LEN 布局
+  *    0x11 状态上报:  DATA = 25 字节, 见下方 UART_STATUS_DATA_LEN 布局
+ *                    (前 24 字节是老格式, 第 25 字节 = 当前软件平均次数)
   *
   *    0x12 ★原始上报: DATA = 192 字节 = 32 x float32 热电势 (µV)
   *                                     + 16 x float32 冷端温度 (°C)。
@@ -47,11 +48,16 @@
   *    0x02 启动/停止采集: DATA[0] = 0 停止 / 1 启动。  应答: 0x11 状态帧
   *
   *    0x03 读取单次温度: DATA 可省略;
-  *           LEN = 0 或 DATA[0] = 0xFF  -> 全部通道 (协议固定 32 槽)
-  *           LEN = 1 且 DATA[0] = 0..31 -> 只报该通道 (其余填 NaN)
-  *           应答: 0x10 温度帧
-  ******************************************************************************
-  */
+ *           LEN = 0 或 DATA[0] = 0xFF  -> 全部通道 (协议固定 32 槽)
+ *           LEN = 1 且 DATA[0] = 0..31 -> 只报该通道 (其余填 NaN)
+ *           应答: 0x10 温度帧
+ *
+ *    0x04 ★设置软件平均次数: LEN = 1, DATA[0] = N (1..64)。
+ *           固件对每个通道连续读 N 次求算术平均后再上报, 把随机噪声压到
+ *           1/sqrt(N)。N=1 表示不平均。超出范围会被夹到 1..64。
+ *           应答: 0x11 状态帧 (byte24 = 生效后的平均次数)。
+ ******************************************************************************
+ */
 
 #ifndef __UART_PROTOCOL_H
 #define __UART_PROTOCOL_H
@@ -76,6 +82,7 @@ extern "C" {
 #define UART_CMD_DOWN_SET_RATE 0x01u   /**< 下行: 设置采样率 */
 #define UART_CMD_DOWN_RUN      0x02u   /**< 下行: 启动/停止采集 */
 #define UART_CMD_DOWN_SINGLE   0x03u   /**< 下行: 读取单次温度 */
+#define UART_CMD_DOWN_SET_AVG  0x04u   /**< ★下行: 设置每通道软件平均次数 (1..64) */
 
 #define UART_DATA_MAX_LEN      200u    /**< 允许的最大 DATA 长度 */
 #define UART_FRAME_MAX_LEN     (3u + UART_DATA_MAX_LEN + 2u)
@@ -88,7 +95,10 @@ extern "C" {
 #define UART_TEMP_SLOT_COUNT   32u
 /** 温度帧 DATA 长度 = 32 x float32 = 128 字节 (固定) */
 #define UART_TEMP_DATA_LEN     (UART_TEMP_SLOT_COUNT * 4u)
-#define UART_STATUS_DATA_LEN   24u
+/** 状态帧 DATA 长度 = 25 字节。
+ *  前 24 字节与老格式逐字节一致, 第 25 字节是扩展的"当前软件平均次数"。
+ *  老上位机按 24 字节读, 多出来的 1 字节被忽略, 因此完全兼容。 */
+#define UART_STATUS_DATA_LEN   25u
 
 /** ★ 原始数据帧 (CMD=0x12) —— 让上位机用自己的分度表算温度。
  *
@@ -147,6 +157,7 @@ extern "C" {
 #define UART_ST_FLAGS         21u   /**< u8  异常标志, 见 UART_ST_FLAG_xxx */
 #define UART_ST_TIMEOUT_LO    22u   /**< u16 小端: 等待 DRDY 超时累计次数 */
 #define UART_ST_TIMEOUT_HI    23u
+#define UART_ST_AVG           24u   /**< ★u8 当前生效的软件平均次数 (1..64) */
 
 /* 状态帧 flags 位定义 */
 #define UART_ST_FLAG_SELFTEST   0x01u  /**< 上电自检失败 (热电偶多项式) */
@@ -168,7 +179,8 @@ typedef enum
   UART_EV_SET_RATE,   /**< 设置采样率 */
   UART_EV_START,      /**< 启动采集 */
   UART_EV_STOP,       /**< 停止采集 */
-  UART_EV_SINGLE      /**< 读取单次温度 */
+  UART_EV_SINGLE,     /**< 读取单次温度 */
+  UART_EV_SET_AVG     /**< ★设置软件平均次数 */
 } UART_Event_t;
 
 typedef struct
@@ -177,6 +189,7 @@ typedef struct
   uint8_t dr_bits;    /**< SET_RATE: 已移位的 DR[2:0] */
   uint8_t reject;     /**< SET_RATE: 已移位的 50/60[1:0] */
   uint8_t channel;    /**< SINGLE: 0..31 或 UART_CH_SINGLE_ALL */
+  uint8_t avg_n;      /**< ★SET_AVG: 请求的软件平均次数 (固件会夹到 1..64) */
 } UART_EventMsg_t;
 
 /** 状态帧的数据来源 */
@@ -195,6 +208,7 @@ typedef struct
   uint16_t open_tc_count;
   uint16_t phase_timeout_count;
   uint8_t  flags;
+  uint8_t  avg_n;             /**< ★当前生效的软件平均次数 (1..64), 填进状态帧 byte24 */
 } UART_Status_t;
 
 /*==============================================================================
